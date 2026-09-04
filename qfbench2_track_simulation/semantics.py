@@ -278,14 +278,19 @@ def check_tier_a(
     """
     breaches: list[str] = []
 
-    # 0. Exact event count. Deterministic scenario, deterministic reference: a faithful run emits
-    #    exactly as many rows. This is also the numerator defence -- extra rows raise the ranked
+    # 0. Exact event count. A faithful run emits exactly as many rows -- "faithful" meaning it
+    #    reproduces the reference's DRAW SEQUENCE, not merely correct market logic: 65 of 66
+    #    public scenarios draw latency from a distribution off one shared seeded stream. This is also the numerator defence -- extra rows raise the ranked
     #    events/sec, so tolerating them here would pay for padding.
     if len(candidate_df) != len(reference_df):
         breaches.append(
             f"Event count mismatch: candidate={len(candidate_df)}, "
-            f"reference={len(reference_df)}. The scenario is deterministic; the emitted row count "
-            "must match exactly."
+            f"reference={len(reference_df)}. The emitted row count must match the reference "
+            "exactly. If your simulator is itself deterministic and still differs here, the usual "
+            "cause is a different random-draw sequence rather than different market logic: most "
+            "scenarios draw message latency from a distribution, sharing one seeded NumPy stream "
+            "with the agents in a fixed call order, so changing the generator, the number of "
+            "draws, or their order changes the event calendar. See the Tier-A note in README.md."
         )
 
     ref_fills = reference_df[reference_df["msg_type"].isin(FILL_MSG_TYPES)].reset_index(

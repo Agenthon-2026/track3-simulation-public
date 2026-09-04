@@ -244,6 +244,44 @@ reference, the same fill events in the same order at the same prices and sizes, 
 coverage in both directions (no missing events, no extra ones), and Kendall-τ ≥ 0.999 on the event
 ordering. The only numeric tolerance is ±1 µs on event timestamps.
 
+> **Tier A requires you to preserve the reference's random-number draw sequence. Read this
+> before you optimize anything.**
+>
+> 65 of the 66 public scenarios declare a *stochastic* latency model (`log_normal`, `pareto`
+> or `uniform`); 42 of those are Tier A. In those scenarios every message is delivered at
+> `deliver_at = sent_time + int(latency)`, where `latency` is drawn from the scenario's
+> distribution. The event calendar is keyed on `deliver_at`, so a different latency draw
+> reorders events, changes the fill sequence, and fails Tier A — even for a simulator that is
+> completely correct.
+>
+> Those draws come from **one** seeded NumPy global stream, consumed in a fixed call order:
+> the oracle first, then **one draw per agent**, then the latency model, then the kernel
+> (`baselines/abides_fork/config.py`). The latency stream's seed therefore depends on **how
+> many agents were constructed before it**. Change the agent count, construct agents in a
+> different order, batch or vectorize their construction, or swap NumPy's Mersenne Twister
+> for another generator, and every latency value in the run changes.
+>
+> Concretely, on the same scenario and the same seed, varying only the agent count:
+>
+> ```
+>  50 agents -> first latency draw 3895218926
+>  49 agents -> first latency draw 1587945593   DIFFERENT
+>  51 agents -> first latency draw  949690001   DIFFERENT
+> ```
+>
+> The ±1 µs timestamp tolerance does not help: a re-drawn latency moves `deliver_at` by the
+> latency scale (`mean_ns`), which is orders of magnitude larger.
+>
+> **So on a Tier-A scenario you may change how the simulation executes, but not what it draws
+> or the order it draws in.** Vectorize the matching engine, rewrite hot loops, use better data
+> structures, move work to the GPU, parallelize anything that does not touch the draw sequence.
+> Do not change the RNG, the number of `random_state` draws, or their order. This is what
+> "semantic-preserving" means in this track's title, and it is the single most common way a
+> correct simulator fails Tier A.
+>
+> Tier B scenarios carry no such requirement — see `docs/CATEGORIES.md`, which explains why
+> bit-exact comparison is not meaningful there.
+
 **Tier B** (Families 2, 4, 5 — statistical): your mid-price series must be statistically
 close to the reference — return-distribution KS ≤ 0.08 (the same calibrated KS check as the
 stylized-fact gate) and time-averaged spread within ±10 bps.

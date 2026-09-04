@@ -231,6 +231,19 @@ Common causes of accidental non-determinism to avoid: using Python's `time.time(
 anything that affects order timing; using `dict` ordering (which changed across Python
 versions); using threads that run in unpredictable order.
 
+**The part that catches people out: determinism is a property of an implementation, not of a
+seed.** Read the first sentence above carefully — it says the same seed given to *the same RNG*
+produces the same sequence. Your simulator being perfectly deterministic does not mean it produces
+the *reference's* trace. If you draw random numbers from a different generator, or draw a
+different number of them, or draw them in a different order, you get a different sequence from the
+same seed — and on a Tier-A scenario that is a failure, however correct your market logic is.
+
+This is not a corner case here: 65 of the 66 public scenarios draw their message latencies from a
+distribution, and those draws share one seeded NumPy stream with the agents, consumed in a fixed
+order. The Tier-A note in the top-level `README.md` gives the exact call order and what you may
+change without breaking it. Tier B scenarios do not have this constraint, and `docs/CATEGORIES.md`
+explains why.
+
 ---
 
 ## 8. The semantic regression check
