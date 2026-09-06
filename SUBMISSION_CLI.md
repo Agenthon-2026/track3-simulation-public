@@ -128,10 +128,12 @@ for local adapter preparation.
 4. **Pin temperature/seed** where the API supports it. `api`-category entries are verified
    *statistically* (bootstrap-CI overlap on organizer rerun for T2/T3/T4; for T1, the single-pass
    per-unit verdicts must agree exactly); BYO entries bit-reproducibly.
-5. **Budget (FINAL, ruled 2026-08-28).** A uniform per-unit budget applies
-   to every submission — **1,000,000 input + 100,000 output tokens per unit**
-   — enforced via proxy logs and spot audit. It applies to house-endpoint calls in both
-   `api` and BYO mode.
+5. **Track 3 stays offline.** Simulation uses `network = "none"` and makes no model-API
+   calls. Model-using submissions follow the House API allocation in their own track's guide:
+   [Track 1](https://github.com/Agenthon-2026/track1-coding-public/blob/main/SUBMISSION_CLI.md#rules-for-model-api-use-restricted-mode),
+   [Track 2](https://github.com/Agenthon-2026/track2-forecasting-public/blob/main/SUBMISSION_CLI.md#rules-for-model-api-use-restricted-mode), or
+   [Track 4](https://github.com/Agenthon-2026/track4-analysis-public/blob/main/SUBMISSION_CLI.md#rules-for-model-api-use-restricted-mode).
+   Those rules do not give a simulator model access.
 
 **One leaderboard.** All categories rank on a single board; every entry is tagged with its
 category, the models used (pinned versions), and their training cutoffs.
