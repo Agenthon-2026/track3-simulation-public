@@ -1,110 +1,138 @@
-"""The Tier-A draw-sequence contract, and the numbers the documentation states about it.
+"""Execute baseline seed assignment behind the public Tier-A guidance.
 
-Why this file exists. Tier A demands an exact trace match. 65 of the 66 public scenarios draw
-message latency from a distribution, and those draws share ONE seeded NumPy global stream with
-the agents, consumed in a fixed call order (``baselines/abides_fork/config.py``: oracle, then one
-draw per agent, then the latency model, then the kernel). So the latency stream's seed depends on
-how many agents were constructed before it, and a candidate that changes the generator, the number
-of draws, or their order gets a different event calendar from the same seed -- and fails Tier A
-however correct its market logic is.
-
-Two published statements were on opposite sides of this, describing the same simulator:
-
-    docs/CATEGORIES.md   (Tier B) "a slightly different internal RNG sequence will produce
-                                  slightly different prices even with the same seed"
-    regression_suite/    (Tier A) "The scenario is deterministic given its seed"
-
-The first is true. The second is true only of the reference implementation. These tests keep the
-documentation on the true side of that, and keep its stated census matching the shipped units.
+Only ABIDES constructors are lightweight stand-ins. The actual build_config,
+_draw_random_state and ScenarioLatencyModel code executes; no simulator is run.
+All scenario fixtures and the census are public or synthetic.
 """
 from __future__ import annotations
 
+import importlib.util
 import json
 import pathlib
-import re
+import sys
+import tomllib
+import types
 
 import numpy as np
+import pytest
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
-STOCHASTIC = {"uniform", "log_normal", "lognormal", "pareto"}
+STOCHASTIC = {"uniform", "log_normal", "pareto"}
 
 
-def _units():
-    for scenario in sorted((REPO / "units").glob("*/scenario.json")):
-        card = scenario.parent / "card.toml"
-        tier = None
-        if card.exists():
-            m = re.search(r'tier\s*=\s*["\']?([A-Za-z]+)', card.read_text(encoding="utf-8"))
-            tier = m.group(1) if m else None
-        yield scenario.parent.name, json.loads(scenario.read_text(encoding="utf-8")), tier
+@pytest.fixture
+def baseline_config(monkeypatch):
+    """Import the shipped configuration with only external ABIDES objects replaced."""
+    saved_state = np.random.get_state()
+
+    def construct(*args, **kwargs):
+        return types.SimpleNamespace(args=args, **kwargs)
+
+    class LatencyBase:
+        def __init__(self, *, random_state, **kwargs):
+            self.random_state = random_state
+
+    def unused_default_latency(*args, **kwargs):
+        raise AssertionError("the synthetic scenario supplies its latency configuration")
+
+    modules = {
+        "abides_core": {},
+        "abides_core.latency_model": {"LatencyModel": LatencyBase},
+        "abides_core.utils": {"str_to_ns": lambda value: 0},
+        "abides_markets": {},
+        "abides_markets.agents": {"ExchangeAgent": construct},
+        "abides_markets.oracles": {"SparseMeanRevertingOracle": construct},
+        "abides_markets.utils": {"generate_latency_model": unused_default_latency},
+        "abides_fork": {},
+        "abides_fork.agents": {"AGENT_REGISTRY": {"NoiseTrader": construct}},
+    }
+    for name, members in modules.items():
+        module = types.ModuleType(name)
+        module.__dict__.update(members)
+        monkeypatch.setitem(sys.modules, name, module)
+    source = REPO / "baselines" / "abides_fork" / "config.py"
+    spec = importlib.util.spec_from_file_location("_rng_contract_config", source)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert pathlib.Path(module.__file__).resolve() == source.resolve()
+    try:
+        yield module
+    finally:
+        np.random.set_state(saved_state)
 
 
-def test_the_documented_census_matches_the_shipped_units():
-    """README states 65-of-66 and 42 Tier A. If a unit is added or a latency model changes,
-    the prose goes stale silently -- so the prose is asserted against the units themselves."""
-    rows = list(_units())
-    stochastic = [u for u, sc, _ in rows
-                  if (sc.get("latency_config") or {}).get("model") in STOCHASTIC]
-    tier_a_stochastic = [u for u, sc, tier in rows
-                         if (sc.get("latency_config") or {}).get("model") in STOCHASTIC
-                         and (tier or "").upper().startswith("A")]
-    readme = (REPO / "README.md").read_text(encoding="utf-8")
-    assert f"{len(stochastic)} of the {len(rows)} public scenarios" in readme, (
-        f"README census is stale: measured {len(stochastic)} stochastic of {len(rows)} units"
-    )
-    assert f"{len(tier_a_stochastic)} of those are Tier A" in readme, (
-        f"README census is stale: measured {len(tier_a_stochastic)} stochastic Tier-A units"
-    )
+def scenario(n_agents):
+    return {
+        "seed": 42,
+        "exchange_config": {},
+        "oracle_config": {"params": {}},
+        "horizon_ns": 1_000_000_000,
+        "agent_configs": [{"agent_type": "NoiseTrader", "count": n_agents}],
+        "latency_config": {
+            "model": "uniform",
+            "params": {"min_ns": 1_000, "max_ns": 1_000_000},
+        },
+    }
 
 
-def test_stochastic_latency_is_the_norm_not_the_exception():
-    """The premise of the whole Tier-A note. If this ever inverts, the note needs rewriting
-    rather than merely renumbering."""
-    rows = list(_units())
-    stochastic = sum(1 for _, sc, _ in rows
-                     if (sc.get("latency_config") or {}).get("model") in STOCHASTIC)
-    assert stochastic > len(rows) / 2, (stochastic, len(rows))
+def initial_seed(random_state):
+    return int(random_state.get_state()[1][0])
 
 
-def test_the_latency_seed_depends_on_the_agent_count():
-    """The mechanism the note describes, reproduced from config.py's own draw order.
-
-    ``_draw_random_state`` consumes from the ONE global stream seeded by ``np.random.seed(seed)``:
-    oracle (config.py:207), one per agent inside the count loop (:262), the latency model (:274),
-    then the kernel (:278). Change the agent count and the latency model's seed moves.
-    """
-    def first_latency_draw(n_agents: int, seed: int = 42) -> int:
-        np.random.seed(seed)
-        def draw():
-            return np.random.RandomState(
-                seed=np.random.randint(low=0, high=2**32, dtype="uint64"))
-        draw()                          # oracle
-        for _ in range(n_agents):
-            draw()                      # one per agent
-        return int(draw().randint(0, 2**32))   # the latency model's stream
-
-    base = first_latency_draw(50)
-    assert first_latency_draw(50) == base, "same agent count must reproduce"
-    for n in (49, 51, 100):
-        assert first_latency_draw(n) != base, (
-            f"{n} agents produced the same latency stream as 50 -- the coupling this note "
-            "warns about would not exist, and the note should be removed"
-        )
+def test_stochastic_latency_is_the_norm_in_public_single_scenarios():
+    rows = []
+    for path in sorted((REPO / "units").glob("*/scenario.json")):
+        card = tomllib.loads((path.parent / "card.toml").read_text())
+        tier = card["scoring"]["params"]["semantic_tier"]
+        assert tier in {"A", "B"}
+        rows.append((json.loads(path.read_text()), tier))
+    assert rows
+    stochastic = [sc for sc, _ in rows if sc.get("latency_config", {}).get("model") in STOCHASTIC]
+    assert len(stochastic) > len(rows) / 2
+    assert any(tier == "A" and sc.get("latency_config", {}).get("model") in STOCHASTIC
+               for sc, tier in rows)
 
 
-def test_the_participant_docs_do_not_claim_seed_alone_gives_determinism():
-    """The corrected claim. `regression_suite/README.md` told participants 'The scenario is
-    deterministic given its seed', which is true of the reference implementation and false of
-    theirs -- the exact misreading that makes a correct simulator fail Tier A."""
-    body = (REPO / "regression_suite" / "README.md").read_text(encoding="utf-8")
-    assert "The scenario is deterministic given its seed" not in body
-    assert "not across implementations" in body
+def test_actual_config_assigns_oracle_exchange_agents_latency_then_kernel(baseline_config):
+    count = 50
+    config = baseline_config.build_config(scenario(count))
+    oracle_state = config["custom_properties"]["oracle"].args[2]["ABM"]["random_state"]
+    agent_states = [agent.random_state for agent in config["agents"]]
+    assert len(agent_states) == count + 1  # the exchange is also an agent
+    observed = [initial_seed(state) for state in [
+        oracle_state, *agent_states, config["agent_latency_model"].random_state,
+        config["random_state_kernel"],
+    ]]
+    expected = np.random.RandomState(42).randint(0, 2**32, size=count + 4, dtype="uint64")
+    assert observed == [int(value) for value in expected]
 
 
-def test_the_tier_a_note_tells_participants_what_they_may_change():
-    """A warning that does not say what to do instead is not a framework."""
-    readme = (REPO / "README.md").read_text(encoding="utf-8")
-    assert "preserve the reference's random-number draw sequence" in readme
-    assert "one draw per agent" in readme
-    # ...and it must say what optimization REMAINS legal, or it reads as "do not optimize".
-    assert "Vectorize the matching engine" in readme
+def test_actual_latency_repeats_but_changes_with_agent_seed_assignment(baseline_config):
+    def first_latency(count):
+        config = baseline_config.build_config(scenario(count))
+        return config["agent_latency_model"].get_latency(0, 1)
+
+    original = first_latency(50)
+    assert first_latency(50) == original
+    assert first_latency(49) != original
+    assert first_latency(51) != original
+
+
+def test_participant_guidance_distinguishes_seed_from_trace():
+    readme = (REPO / "README.md").read_text()
+    assert "A shared seed alone does not" in readme
+    assert "separate random states" in readme
+    assert "exchange agent" in readme
+    regression = (REPO / "regression_suite" / "README.md").read_text()
+    assert "The scenario is deterministic given its seed" not in regression
+    assert "checks inspect the emitted trace" in regression
+
+
+def test_guidance_keeps_output_preserving_rng_optimizations_eligible():
+    readme = (REPO / "README.md").read_text()
+    assert "different RNG implementation are allowed" in readme
+    assert "Those checks\n> inspect outputs" in readme
+    assert "Do not change the RNG" not in readme
+    concepts = (REPO / "docs" / "CONCEPTS.md").read_text()
+    assert "does not inspect or mandate a\nparticular RNG implementation" in concepts
