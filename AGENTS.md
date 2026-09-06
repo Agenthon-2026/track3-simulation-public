@@ -157,12 +157,12 @@ from qfbench2_common.verifier import HierarchicalVerifier, GateResult
 Install with:
 
 ```bash
-pip install "qfbench2-common @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@v2.3.1#subdirectory=common"
+pip install "qfbench2-common @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@v2.4.1#subdirectory=common"
 ```
 
-`v2.3.1` is the tag `QFBENCH2_COMMON_REF` in `.github/workflows/ci.yml` carries and the tag the
-scorer runs. Pin the tag rather than installing from a branch — an unpinned toolkit is how a local
-result and a scored result come to disagree without either side noticing.
+Pin the participant toolkit release rather than installing from a branch. The separate
+`QFBENCH2_COMMON_REF` in `.github/workflows/ci.yml` remains `v2.3.1`; that CI test pin does not
+identify the production scoring artifact.
 
 ## Quick self-check before marking work done
 
