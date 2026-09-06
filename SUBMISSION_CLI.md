@@ -49,8 +49,9 @@ internet** in official scoring.
 > Your two supported options are therefore:
 >
 > 1. **House endpoint** — call `MODEL_ENDPOINT` with `MODEL_NAME`. Free, metered per run.
-> 2. **Bring your own weights** — vendor them in the image (`byo-large` / `byo-small`) and run
->    them locally. Nothing is fetched at run time.
+> 2. **Bring your own adapter** — ship one LoRA adapter, rank ≤ 64, for the organizer-served
+>    base. Call the same endpoint with your supplied adapter model id. See
+>    [adapter-only BYO](#adapter-only-byo); do not bundle full model weights or run a model server.
 >
 > **No participant API keys exist.** The harness injects none and there is no mechanism for a
 > submission to supply one, so a vendor key would have nothing to reach even if you had one.
@@ -67,15 +68,18 @@ a default.
 This page previously said "Track 3 sits outside these categories", and that was the dangerous
 half-truth. Track 3 is outside the *agent tiers* — it runs at `network = "none"` and calls no model
 — but the descriptor validator still requires the field, and the wrapper it validates against
-coerced an absent value to `api`. `api` is documented below as the **CPU** tier, so a Track 3
-submission that omitted the field silently declared CPU while requiring the dedicated GPU queue.
+coerced an absent value to `api`. The old page described `api` as the CPU tier, so omission
+recorded the wrong submission kind. Track 3 still requires its dedicated GPU queue.
 
 | Category | Track | What you bundle | Model access | Compute tier |
 |---|---|---|---|---|
 | `simulator` | **3 (simulation)** | a market simulator image; the CUDA runtime and every dependency **vendored** | none — `network = "none"` | the dedicated Track 3 queue, one worker, GPU attached |
-| `api` | 1 / 2 / 4 | prompts / harness / system-prompts / agents (your contribution is the scaffolding) | the **house endpoint only**, via the proxy | CPU |
-| `byo-large` | 1 / 2 / 4 | your own **large** model weights in-image | local weights; may **also** call the house endpoint | GPU, 80GB-class |
-| `byo-small` | 1 / 2 / 4 | your own **small** model weights (≤ ~8B) in-image | local weights; may **also** call the house endpoint | CPU or small GPU |
+| `api` | 1 / 2 / 4 | prompts / harness / system-prompts / agents (your contribution is the scaffolding) | the **house endpoint only**, via the proxy | the unit card's resource limits |
+| `byo-large` / `byo-small` | 1 / 2 / 4 | one LoRA adapter plus your agent code | the house endpoint serving the organizer's base with your adapter loaded | the unit card's resource limits |
+
+The `byo-*` descriptor values are legacy names, not separate small- and large-weights tiers.
+The adapter requirement applies to BYO model submissions on the agent tracks; Track 3 uses
+`simulator` and needs no adapter.
 
 Queue routing keys on the **track**, not on the string you write: the category records what kind of
 submission this is, and cannot be used to select a different box.
@@ -84,6 +88,24 @@ The canonical example descriptor is published by the shared toolkit, one per (tr
 `qfbench2_common/contracts/fixtures/c5/simulation_<phase>.json`. Use those bytes; a hand-written
 third example is how the generated wrapper and the documentation drifted apart in the first place.
 
+### Adapter-only BYO
+
+This section applies to Tracks 1, 2 and 4. Track 3 remains offline and calls no model.
+
+A LoRA (low-rank adaptation) adapter contains parameter updates for the organizer's base model.
+Package exactly one `adapter_model.safetensors` and `adapter_config.json` pair together in your
+image. Use LoRA rank ≤ 64 and declare `target_modules` accurately. Full fine-tuning and shipping
+full model weights are not permitted. The directory for extraction is supplied with submission
+instructions; keep the pair in one relocatable directory rather than guessing a required path.
+
+The BYO contract assigns serving to the organizer: static extraction runs none of your code;
+the organizer starts the base with your adapter loaded and tears the server and extracted adapter
+down when the submission finishes. Your submission must not run a model server. Its client uses
+the supplied `MODEL_ENDPOINT` and `MODEL_NAME`; for BYO, `MODEL_NAME` identifies your adapter.
+These are the packaging and serving requirements, not a statement that a particular endpoint
+is currently available. See the [published BYO guide](https://github.com/Agenthon-2026/Agenthon2026-public/blob/09873cad2f3ea1171acd4e19cd8c10b3cb6a126f/starter-packs/track4/AGENTS.md#L401)
+for local adapter preparation.
+
 ### Container environment contract (`restricted` mode, set by the harness)
 
 | Variable | Value |
@@ -91,25 +113,25 @@ third example is how the generated wrapper and the documentation drifted apart i
 | `HTTP_PROXY` / `HTTPS_PROXY` | the audited egress proxy. **Read these from the environment; never hardcode a proxy host** — the address is an operational detail and it has changed. Most HTTP clients honour them automatically |
 | `NO_PROXY` | hosts that must bypass the proxy |
 | `MODEL_ENDPOINT` | the organizer-hosted OpenAI-compatible endpoint. This is the **only** model API you can reach |
-| `MODEL_NAME` | the pinned house-model id served at `MODEL_ENDPOINT` (use it in your client calls; published with the model pin) |
+| `MODEL_NAME` | the organizer-supplied model id for this run: the house model for `api`, or your adapter for BYO. Use it unchanged in client calls |
 | `QFBENCH_NETWORK` | `restricted` (or `none` for simulation / local fallback) |
 
 ### Rules for model-API use (`restricted` mode)
 
 1. **Vendor-side tools OFF.** Web search, code execution, retrieval, and any other vendor-side
    tool MUST be disabled in every API call. Enforced by rule + audit of the proxy logs.
-2. **Pin model versions.** The house endpoint serves a pinned model id (`MODEL_NAME`); for
-   bundled weights, pin the exact revision. Floating aliases (`*-latest`) are not reproducible
+2. **Pin model versions.** The house endpoint serves the organizer's pinned base; for a BYO
+   adapter, pin its exact revision too. Floating aliases (`*-latest`) are not reproducible
    and are rejected at verification.
-3. **Disclose training cutoffs.** The training cutoff of every model used (API or bundled) MUST
+3. **Disclose training cutoffs.** The training cutoff of every model used, including BYO adapters, MUST
    be declared in submission metadata (`models[].training_cutoff` in `submission.json`).
 4. **Pin temperature/seed** where the API supports it. `api`-category entries are verified
    *statistically* (bootstrap-CI overlap on organizer rerun for T2/T3/T4; for T1, the single-pass
    per-unit verdicts must agree exactly); BYO entries bit-reproducibly.
 5. **Budget (FINAL, ruled 2026-08-28).** A uniform per-unit budget applies
    to every submission — **1,000,000 input + 100,000 output tokens per unit**
-   — enforced via proxy logs and spot audit. It applies to house-endpoint calls; locally-run
-   bundled weights are bounded by the card's wall clock and resource caps instead.
+   — enforced via proxy logs and spot audit. It applies to house-endpoint calls in both
+   `api` and BYO mode.
 
 **One leaderboard.** All categories rank on a single board; every entry is tagged with its
 category, the models used (pinned versions), and their training cutoffs.

@@ -39,7 +39,7 @@ The **per-family breakdown** of the 65 public regression scenarios is:
 | F1 — Matching-Engine Semantics (incl. MR) | A | 14 |
 | F2 — Agent-Mix / Market-Regime | B | 11 |
 | F3 — Latency Topology / Profile | A | 9 |
-| F4 — Oracle-Noise Robustness | B | 0 (sealed-only) |
+| F4 — Oracle-Noise Robustness | B | 0 |
 | F5 — Calibration / Stylized-Fact | B | 12 |
 | F6 — Throughput / Scale (single-scenario) | A | 6 |
 | F7 — Exchange-Protocol | A | 7 |

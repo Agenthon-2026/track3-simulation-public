@@ -60,6 +60,8 @@ jobs:
       # toolkit and not even pyarrow, and must not be skippable on a fork PR.
       - name: Developer-profile guard (no rankable self-report fallback)
         run: python tests/test_host_metrics.py
+      - name: Standalone timer JSON profile (stdlib only, no Docker)
+        run: python tests/test_timer_profile.py
       # Card drift guard. Cards are GENERATED, so a value edited in units/ but not in the generator
       # survives only until the next regeneration -- which is how every card came to carry
       # `gpu = true` while both generators still emitted `false`. Stdlib-only; its one
