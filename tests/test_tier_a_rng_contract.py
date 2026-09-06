@@ -119,6 +119,13 @@ def test_actual_latency_repeats_but_changes_with_agent_seed_assignment(baseline_
     assert first_latency(51) != original
 
 
+def test_actual_config_clock_remains_nanoseconds(baseline_config):
+    config = baseline_config.build_config(scenario(1))
+    # 2021-02-05 midnight UTC, the baseline epoch; independent integer unit check.
+    assert config["start_time"] == 1_612_483_200_000_000_000
+    assert config["stop_time"] == config["start_time"] + 1_000_000_000
+
+
 def test_participant_guidance_distinguishes_seed_from_trace():
     readme = (REPO / "README.md").read_text()
     assert "A shared seed alone does not" in readme
