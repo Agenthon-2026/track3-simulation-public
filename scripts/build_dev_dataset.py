@@ -48,11 +48,13 @@ def build(units: pathlib.Path, out: pathlib.Path) -> int:
         total += n
         print(f"  {u.name:<40} answers stripped: {n:>2}")
 
-    print(f"\ningestion tree: {ing_root}   ({len(unit_dirs)} units, submission-facing)")
+    print(f"\ningestion tree: {ing_root.parent}   ({len(unit_dirs)} units, submission-facing)")
     print(f"scoring tree:   {sco_root}   ({len(unit_dirs)} units, grader only)")
     print(f"answer paths stripped: {total}")
     print("\nUpload the INGESTION tree as the phase input_data and the SCORING tree as its")
     print("reference_data. Swapping them hands every participant the answers.")
+    print("This splitter does not create the signed evaluation plan or its verification trust store;")
+    print("prepare that required reference-dataset metadata before uploading.")
     return 0
 
 
