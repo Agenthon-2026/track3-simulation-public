@@ -189,7 +189,8 @@ def build_config(scenario: dict[str, Any], seed: int | None = None) -> dict[str,
     reference_price = int(oracle_params.get("initial_price", 100_000))
     horizon_ns = int(scenario["horizon_ns"])
 
-    date_ns = int(pd.to_datetime(_DATE).to_datetime64())
+    # Timestamp.value is explicitly nanoseconds; to_datetime64 may use microseconds.
+    date_ns = int(pd.to_datetime(_DATE).value)
     mkt_open = date_ns + str_to_ns("09:30:00")
     mkt_close = mkt_open + horizon_ns
     oracle_close = date_ns + str_to_ns("16:00:00")

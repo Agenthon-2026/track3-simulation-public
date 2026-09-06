@@ -125,6 +125,8 @@ jobs:
         run: python -m pytest tests/test_telemetry_binding.py -q
       - name: Semantic exactness tests (no intersection, no prefix, no truncation, no NaN)
         run: python -m pytest tests/test_semantics_exactness.py -q
+      - name: Baseline clock compatibility and Tier-A RNG guidance
+        run: python -m pytest tests/test_tier_a_rng_contract.py -q
       - name: Message-ledger completeness tests (card declaration, reference-relative floor)
         run: python -m pytest tests/test_ledger_completeness.py -q
       - name: Clip-ceiling derivation tests (the C1 metric domain)

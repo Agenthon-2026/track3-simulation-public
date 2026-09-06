@@ -231,6 +231,17 @@ Common causes of accidental non-determinism to avoid: using Python's `time.time(
 anything that affects order timing; using `dict` ordering (which changed across Python
 versions); using threads that run in unpredictable order.
 
+**A shared seed does not guarantee the reference trace.** The same RNG implementation and
+state produce the same sequence; different generators or different seed/draw assignments can
+produce different market events from the same seed. The baseline seeds separate random states
+for its oracle, exchange, scenario agents, latency model and kernel in a fixed construction order.
+Most published single-scenario units use stochastic message latency, so changes to that assignment
+can also change delivery order. The Tier-A note in `README.md` explains this coupling.
+
+Tier A checks the emitted trace, with the published tolerances. It does not inspect or mandate a
+particular RNG implementation: any optimization remains eligible if its output passes those
+checks. Tier B uses the statistical comparison in `docs/CATEGORIES.md` instead.
+
 ---
 
 ## 8. The semantic regression check

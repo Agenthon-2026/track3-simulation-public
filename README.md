@@ -244,6 +244,25 @@ reference, the same fill events in the same order at the same prices and sizes, 
 coverage in both directions (no missing events, no extra ones), and Kendall-τ ≥ 0.999 on the event
 ordering. The only numeric tolerance is ±1 µs on event timestamps.
 
+> **Tier A compares the emitted trace with the reference. A shared seed alone does not
+> guarantee a matching trace.**
+>
+> Most published single-scenario units use stochastic message latency. The baseline's
+> `baselines/abides_fork/config.py` seeds a NumPy global generator, then uses it to seed
+> separate random states for the oracle, exchange agent, each scenario agent in construction
+> order, latency model, and kernel. Changing those seed draws can change latency and the
+> order in which messages reach the exchange, even when both implementations are deterministic.
+>
+> Preserve the reference's random choices when optimizing the baseline, or otherwise verify
+> that your implementation produces a trace satisfying the same Tier-A checks. Those checks
+> inspect outputs, not your RNG implementation. Batching, parallelism, different data structures,
+> and a different RNG implementation are allowed when the resulting trace passes the published
+> event, fill, ordering, and timestamp checks. The timestamp tolerance does not relax the other
+> checks.
+>
+> Tier B uses the statistical comparison described below and in `docs/CATEGORIES.md`;
+> it does not require the Tier-A trace match.
+
 **Tier B** (Families 2, 4, 5 — statistical): your mid-price series must be statistically
 close to the reference — return-distribution KS ≤ 0.08 (the same calibrated KS check as the
 stylized-fact gate) and time-averaged spread within ±10 bps.
