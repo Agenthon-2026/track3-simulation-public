@@ -166,12 +166,12 @@ provided via the mounted `/input/` directory.
 
 ## The two baselines
 
-### Baseline 1 — ABIDES Python (the throughput floor)
+### Baseline 1 — ABIDES Python (local performance reference)
 
-The reference baseline is the unmodified ABIDES Python engine pinned to a specific commit,
+The reference baseline is the ABIDES Python engine pinned to a specific commit,
 driven by the `abides_fork` `simulate` adapter. ABIDES itself is not vendored here; the
-`baselines/Dockerfile` fetches it at the pinned commit at build time and layers the adapter
-on top. Build the image and run the throughput timer to measure the floor you must beat:
+`baselines/Dockerfile` fetches it at the pinned commit, applies four ordered patches, and
+layers the adapter on top. Build the image and measure a local comparison for your optimizations:
 
 ```bash
 docker build --platform=linux/amd64 -t track3-abides-baseline:latest baselines/
@@ -184,10 +184,10 @@ python throughput/timer.py --image track3-abides-baseline:latest \
 See `baselines/README.md` for the pinned commit, the adapter internals, and
 `baselines/build_and_validate.sh` (build + validate against the public reference traces).
 
-The baseline `events_per_sec` on the sealed benchmark is what your submission must exceed
-to receive the `T3_THROUGHPUT_NONIMPROVING` note removed from your record. Being slower
-than ABIDES does not disqualify you — you still receive a rank — but it is noted on the
-leaderboard.
+An admissible submission at or below the recorded reference rate receives the informational
+`t3.throughput_nonimproving` label and still receives its score and rank. The comparison uses
+the mean rates over the evaluation roster; it is not a same-instance baseline measurement.
+See `baselines/README.md` §3. There is no minimum baseline speed to beat for admission.
 
 ### Baseline 2 — vectorized reference (internal performance ceiling)
 
@@ -327,8 +327,8 @@ runner, never read from your `events.json`**. Per unit:
 1. The candidate image is run several times on the same scenario. How many repeats, and whether
    the first is discarded as warm-up, are committed in advance in the evaluation plan — they are
    not chosen after the fact from what was observed.
-2. The first repeat is discarded as warm-up (JIT/XLA compilation, cold page cache, import
-   overhead), per that same pre-commitment.
+2. Discard exactly the warm-up repeats committed in that plan. Do not infer the official
+   count from the local timer's defaults.
 3. Every remaining repeat must be individually valid *and* must have produced the same output
    bytes and the same event count as the run that was scored. A submission whose repeats disagree
    is refused rather than having its best repeat kept.
@@ -340,9 +340,10 @@ Your self-reported `events_per_sec` is still checked for internal consistency (g
 quantity and no branch of the production scorer reads it. See
 `qfbench2_track_simulation/telemetry.py`.
 
-Ranking is by `events_per_sec` descending (`LEADERBOARD_SORT = "desc"`), aggregated over the
-evaluation roster, with the sealed benchmark scenario (`SS-BENCH`) as the throughput-scale
-centrepiece. A bootstrap confidence interval is reported alongside the score; resampling is by
+Ranking is by the **arithmetic mean of the per-unit rates over the complete evaluation roster**,
+descending (`LEADERBOARD_SORT = "desc"`), not a median over a throughput-only subset. Each
+official per-unit rate comes from the repeat measurement described above. A bootstrap
+confidence interval is reported alongside the score; resampling is by
 scenario **family** rather than by unit, because units within a family share a generator and an
 agent mix and so are correlated (see `cluster_key` in `qfbench2_track_simulation/scoring.py`).
 Tie-breaking below the score is a platform-level rule and is not specified in this repository —
@@ -355,14 +356,15 @@ python throughput/timer.py --image <your-image>:latest \
     --scenario regression_suite/scenarios/as06_throughput_fast.json
 ```
 
-Note: the local measurement uses the public throughput example (smaller parameters). The
-sealed benchmark is harder. Local throughput is a directional guide, not a predictor of
-your leaderboard rank.
+The local timer varies seeds and defaults to five runs with the first discarded. Those are
+developer-tool defaults, not the final evaluation plan. Official repeat counts, warm-up treatment
+and measured runtime identity must be published with that plan. Local throughput is a guide for
+your own comparisons, not a predictor of your leaderboard rank.
 
-### Secondary diagnostics (reported, not ranked)
+### Secondary diagnostics (local reports)
 
-The primary leaderboard rank stays raw `events_per_sec`. Alongside it, the harness reports —
-but never ranks or gates on — a set of diagnostics computed offline in `throughput/`:
+The primary leaderboard rank stays raw `events_per_sec`. The developer tools in `throughput/`
+can produce additional diagnostics, but they do not establish an official leaderboard result:
 
 - **speedup** vs. the CPU-ABIDES baseline, **efficiency** (events/sec per GPU-hour or per
   CPU-core-hour), and **memory efficiency** (events per peak resident byte) — `throughput/diagnostics.py`.
@@ -374,7 +376,11 @@ but never ranks or gates on — a set of diagnostics computed offline in `throug
   `throughput/simprofile.py`, feeding Best Systems Diagnosis. It is diagnostic only, never an
   admissibility gate.
 
-Generate the offline report with `python -m throughput.report`.
+Generate the offline report with
+`python -m throughput.report --submission <output-dir> --reference <reference-dir> --out report.json`.
+These diagnostics are omitted on the official scoring path; do not assume a same-instance
+speedup or award measurement is
+available merely because a local report can compute one. See `throughput/README.md` §8.
 
 ---
 
@@ -389,13 +395,13 @@ pip install "qfbench2-common @ git+https://github.com/Agenthon-2026/Agenthon2026
 
 > ### Install the pinned tag, not a branch
 >
-> `Agenthon-2026/Agenthon2026-public` carries the `qfbench2-common` package, and `v2.3.1` is the
-> tag CI installs (`QFBENCH2_COMMON_REF` in `.github/workflows/ci.yml`) and the tag the scorer
-> runs. **Pin a tag rather than installing from a branch** — an unpinned toolkit is how a local
-> result and a scored result come to disagree without either side noticing.
+> The command above selects the participant toolkit release. The separate compatibility-test
+> pin in CI (`QFBENCH2_COMMON_REF` in `.github/workflows/ci.yml`) remains `v2.3.1`; it does not
+> identify the installed competition scorer. Use the versioned runtime manifest for that identity.
+> **Pin a release rather than installing from a branch** so local dependencies do not drift.
 >
-> Requires **Python 3.13 or newer**. On 3.12 the install resolves and then fails at import with
-> `ImportError: cannot import name 'StrEnum'` — that is the interpreter, not the package.
+> Use **Python 3.13** for the toolkit and scoring tools. The ABIDES baseline has its own
+> Python 3.11 environment, as described in `baselines/README.md`.
 >
 > Please do not vendor or reimplement the toolkit. The scorer imports the same code, and a local
 > copy that drifts from it is the one failure mode this package exists to prevent.
@@ -406,30 +412,18 @@ Do not copy-paste scoring code into your repo — it will drift from the canonic
 
 ## Quick-start (6 steps)
 
-**Step 1** — Fork ABIDES and install it. Note the `cd` back: every later step runs
-from *this* repository, not from the ABIDES checkout.
+**Step 1** — Install the toolkit in your Python 3.13 scoring environment and build the
+baseline image. Run every step from this repository's root. The Docker build fetches the pinned
+ABIDES source and applies all four required patches in order.
 
 ```bash
-git clone https://github.com/jpmorganchase/abides-jpmc-public
-(cd abides-jpmc-public && pip install -e abides-core -e abides-markets)
 pip install "qfbench2-common @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@v2.4.1#subdirectory=common"
+docker build --platform=linux/amd64 -t track3-abides-baseline:latest baselines/
 ```
 
-The third line pins the toolkit tag — see "Installing the shared toolkit" above, which is where
-that pin is described. Steps 3 and 4 import the toolkit, so run all three lines before them.
-
-ABIDES is a multi-package repository: it has no top-level `setup.py`/`pyproject.toml` and no
-`[all]` extra, so `pip install -e ".[all]"` from its root exits 1 with *"does not appear to be a
-Python project"*. Name the two subdirectories instead — which is also what the Scope note above
-asks for, since installing them individually is what leaves `abides-gym` out.
-
-Neither subpackage declares any dependency of its own (their `setup.cfg` files carry no
-`install_requires`), so the `pip install` on the second line is not optional: without it
-`import abides_core` fails on `numpy`, and `import abides_markets.utils` on `scipy`.
-`abides_markets.models.order_size_model` additionally imports `pomegranate`, which the baseline
-image patches out at build time (`baselines/patches/order_size_model.pomegranate-free.patch`). For
-the exact pinned stack the reference traces were generated with — and how to apply that patch to a
-local checkout — see `baselines/README.md`.
+The baseline stays inside its Python 3.11 image; the scorer reads its output files. If you need
+a non-Docker ABIDES checkout, use the separate Python 3.11 environment and complete four-patch
+instructions in `baselines/README.md`. An unpatched editable install is not the same baseline.
 
 **Step 2** — Build the reference-trace cache. `run_regression.py` resolves references by
 `scenario_id` under `regression_suite/reference_traces/`, which is **gitignored and empty in a

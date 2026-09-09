@@ -11,10 +11,9 @@ env:
   # The single place this workflow names a toolkit revision. Both jobs that install
   # `qfbench2-common` read it, so a bump is a one-line change and the two can never drift.
   #
-  # This is the release TAG of Agenthon-2026/Agenthon2026-public that carries the frozen
-  # contract set, and it is the SAME string the README's install command pins. It must stay a
-  # tag and never a branch: an unpinned toolkit means a local result and a scored result can
-  # diverge silently, which is the one failure mode the pin exists to prevent.
+  # Compatibility-test pin from the public toolkit; no private credential is needed.
+  # This is separate from the participant release pin in the README and does not
+  # identify the installed competition scorer. Keep it explicit rather than using a branch.
   QFBENCH2_COMMON_REF: v2.3.1
 
 jobs:

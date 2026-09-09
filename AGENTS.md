@@ -86,9 +86,9 @@ Rules that follow from this contract:
   puts GPU time in the denominator and so rewards using the device less. Do not "simplify" the award
   back to ranking on efficiency, and do not rank on utilization either — see `throughput/README.md`
   §6.
-- **Never flip cards outside `track3-simulation-*`.** 229 non-T3 unit cards legitimately carry
-  `gpu = false` (T1: 87 public + 11 private; T2: 1 public + 104 private; T4: 1 public + 26
-  private). A repo-wide `sed` over `gpu = false` breaks three tracks.
+- **Never change another track's resource cards as part of a Track 3 update.** Other tracks
+  have their own resource contracts. A repo-wide replacement of `gpu = false` with `gpu = true`
+  can break those contracts; keep Track 3 resource changes scoped to `track3-simulation-*`.
 - **Sealed Track-3 cards come from the private repo's card generator**, not from hand edits
   here. Any change to the `[environment]` block must land in that generator *and* in this repo
   in the same change — public and private must move together, or the two card sets diverge.

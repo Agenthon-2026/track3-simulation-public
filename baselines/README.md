@@ -1,7 +1,10 @@
 # Track 3 — Simulation Engine Baselines
 
-This document describes the performance baselines that define the admissibility and ranking
-thresholds for Track 3 submissions. The canonical timing protocol is `throughput/timer.py`.
+## Executive summary (read this first)
+
+Use the ABIDES baseline to check your simulator and compare local performance. Correctness
+determines admission; an admissible simulator remains ranked even below the recorded baseline
+rate. `throughput/timer.py` is a local developer tool, not the official timing protocol.
 
 > **No throughput figure on this page was measured on the evaluation fleet, and the ~65,000
 > events/sec ABIDES baseline is withdrawn as a target.** The 2026-06-23 figures were written when
@@ -10,22 +13,22 @@ thresholds for Track 3 submissions. The canonical timing protocol is `throughput
 > executes under. The hardware in §3 was measured on 2026-08-20 — the throughput numbers were not.
 > What replaces 65,000 is the one figure this repository can reproduce from its own files: the 65
 > shipped reference runs, **geometric mean 13,793 events/sec** (range 3,471–18,046), on hardware
-> that is not recorded. See §1 for the derivation and §3 for what the ranking floor is actually
-> compared against — it is neither number. A fleet baseline is coming; it is tracked in
+> that is not recorded. See §1 for the derivation and §3 for the informational baseline
+> comparison — neither number is an admission threshold. A fleet baseline is coming; it is tracked in
 > a tracking issue the organizers will open with the measurement.
 
 ---
 
-## 1. Baseline 1: Unmodified ABIDES Python Stack
+## 1. Baseline 1: ABIDES Python Stack with Track 3 Overlays
 
 **Source:** https://github.com/jpmorganchase/abides-jpmc-public
 **License:** BSD-3-Clause (see full text at the link above)
 **Pinned commit:** `f9cbe51342b7dedd9587e4e069040d68a5c6477f`
 
-This single commit SHA is the canonical Track 3 baseline pin. It is the value that
-every `abides_fork_commit` field in the track (unit `card.toml`, `manifest.json`,
-and the sealed `index.json` files) must carry. The baseline is referenced by this
-pinned upstream commit rather than vendored as a git submodule; there is no
+This is the upstream source pin, recorded in `abides_fork_commit`. The runnable baseline
+also depends on this Track 3 revision, the four ordered patches and adapter below, and its
+Python/system dependencies. The upstream SHA alone is not an immutable image identity.
+ABIDES is fetched at build time rather than vendored as a git submodule; there is no
 `baselines/abides-python/` checkout in this repository.
 
 ### What it is
@@ -101,17 +104,29 @@ this directory (`baselines/abides_fork/`), layered on the unmodified pinned engi
 - `trace.py` — maps ABIDES event logs onto the canonical 7-column trace schema.
 - `simulate.py` — the CLI: runs the scenario, writes `trace.parquet` + `events.json`.
 
-### Pre-built baseline image (recommended)
+### Build the baseline image (recommended)
 
-The baseline ships as a Docker image built from the `Dockerfile` in this directory. It
-fetches ABIDES at the pinned commit, applies the pomegranate-removal patch (`patches/`),
-installs the engine and the adapter, and exposes the `simulate` verb the interface
-contract below requires. Build it and validate it against the public reference traces
-(the same harness path the evaluator uses) with:
+The `Dockerfile` in this directory builds a local image. It fetches the pinned ABIDES commit
+and applies these patches in order before installing the engine and adapter:
+
+1. `order_size_model.pomegranate-free.patch` — replace the pomegranate dependency.
+2. `kernel_message_ledger.patch` — expose the required message ledger.
+3. `exchange_protocol_stp.patch` — support configured self-trade prevention.
+4. `oracle_scheduled_jump.patch` — support configured oracle jumps.
+
+From the repository root, prepare the public reference cache in your Python 3.13 scoring
+environment before building and validating the image:
 
 ```bash
+git lfs pull                              # fetch public trace data, not LFS pointer files
+python regression_suite/build_reference_cache.py
 ./baselines/build_and_validate.sh           # docker build + regression_suite/run_regression.py
 ```
+
+These are local regression checks. They do not establish the final runtime identity or an
+official throughput score. If a check fails, preserve the supplied reference traces and
+diagnose the build, patches, random streams and outputs; do not replace the references to
+make a candidate pass.
 
 ### Installing and running locally (without Docker)
 
@@ -125,14 +140,18 @@ image.
 ```bash
 # Clean Python 3.11 environment with the pinned stack (baseline exception — see above;
 # coloredlogs is a runtime import of abides_core.abides and is not declared in ABIDES's setup.cfg)
-python -m venv .venv && source .venv/bin/activate
-pip install numpy==1.26.4 pandas==1.5.3 scipy==1.17.1 pyarrow==15.0.2 coloredlogs==15.0.1
+python3.11 -m venv .venv-abides
+source .venv-abides/bin/activate
+python -m pip install numpy==1.26.4 pandas==1.5.3 scipy==1.17.1 pyarrow==15.0.2 coloredlogs==15.0.1
 
-# Fetch ABIDES at the pinned commit and drop the unbuildable pomegranate dependency
+# Fetch the pinned source and apply all four overlays in Dockerfile order
 git clone https://github.com/jpmorganchase/abides-jpmc-public
 git -C abides-jpmc-public checkout f9cbe51342b7dedd9587e4e069040d68a5c6477f
 git -C abides-jpmc-public apply "$PWD/baselines/patches/order_size_model.pomegranate-free.patch"
-pip install --no-deps abides-jpmc-public/abides-core abides-jpmc-public/abides-markets
+git -C abides-jpmc-public apply "$PWD/baselines/patches/kernel_message_ledger.patch"
+git -C abides-jpmc-public apply "$PWD/baselines/patches/exchange_protocol_stp.patch"
+git -C abides-jpmc-public apply "$PWD/baselines/patches/oracle_scheduled_jump.patch"
+python -m pip install --no-deps abides-jpmc-public/abides-core abides-jpmc-public/abides-markets
 
 # Run a public regression scenario through the adapter
 PYTHONPATH=baselines python -m abides_fork.simulate \
@@ -141,7 +160,9 @@ PYTHONPATH=baselines python -m abides_fork.simulate \
 ```
 
 This writes `trace.parquet` and an `events.json` sidecar next to `--out`. Always check
-out the exact pinned commit above to reproduce the baseline traces.
+out the exact pinned commit and apply all four overlays. Deactivate this environment before
+returning to the Python 3.13 scoring tools. The Dockerfile remains the reference build recipe;
+the floating base image and apt layer mean a complete immutable runtime manifest is still needed.
 
 ### Interface contract
 
@@ -203,8 +224,10 @@ It is **not open-sourced** and is not available to participants. It serves two p
 | 4 vCPU (x86-64), 16 GiB RAM, GPU unused (CPU-only baseline) | ~400,000 events/sec | **No** — 2026-06-23, hardware since replaced |
 
 Achieving or exceeding this figure is not required and earns nothing. **There is no normalized
-throughput score.** Ranking is by raw median `events_per_sec` descending (`LEADERBOARD_SORT =
-"desc"`); no transform maps a rate onto a 0-1 mark, and this figure is not the top of any scale.
+throughput score.** Ranking uses the arithmetic mean of per-unit `events_per_sec` over the
+complete evaluation roster, descending (`LEADERBOARD_SORT = "desc"`). Each official unit rate
+is the median of its measured repeat rates. No normalization maps that aggregate onto a 0–1
+mark, and the vectorized reference figure is not the top of the scoring scale.
 An earlier revision of this page said submissions in this range "receive maximum normalized
 throughput marks" and called this simulator the "upper reference point in the scoring
 normalization" — there is no such normalization in the scorer. Treat the number as orientation
@@ -268,11 +291,12 @@ The `simulate` CLI entry point in compliant submissions is expected to:
 
 ## 3. Performance Reference Points
 
-Ranking is by **raw median `events_per_sec`** on the sealed throughput-scale scenarios,
-descending — there is no normalized-score transform. The `t3.throughput_nonimproving` label marks a
-submission that did not beat its own units' recorded reference rate; it is admissible but unranked.
-That comparison is per-unit and is defined below — **no number in the table that follows is the
-floor.** The vectorized reference is an internal performance reference point only and gates nothing.
+Ranking uses the **arithmetic mean of per-unit rates over the complete evaluation roster**,
+descending. The `t3.throughput_nonimproving` label is informational: an admissible submission
+at or below the recorded reference rate keeps its score and rank. This is the existing
+[organizer clarification](https://github.com/Agenthon-2026/track3-simulation-public/issues/1#issuecomment-5534948011),
+not a new scoring rule. No number in the table below is a minimum admission speed. The
+vectorized reference is a performance reference point only.
 
 | Configuration | events/sec | Provenance | Role |
 |---|---|---|---|
@@ -302,13 +326,11 @@ table. It was removed rather than re-qualified: no such range was ever measured,
 submissions to measure it from, and a fabricated band is worse than no band — it invites tuning
 towards a number that means nothing.
 
-**What the floor is actually compared against — and it is not 65,000.** The
-`t3.throughput_nonimproving` label is decided by comparing the median of your throughput units'
-`events_per_sec` against the median of the **`events_per_sec` recorded in the reference
-`events.json` of those same units**. Those are the frozen numbers the pinned baseline emitted when
-the reference traces were generated — for the public units, the 3,471–18,046 range in the first
-row above. The floor is not re-measured on the evaluation box, and it is not read from any table
-on this page.
+**What the informational comparison uses.** The `t3.throughput_nonimproving` label compares
+the mean per-unit rate with the mean rate recorded in the reference `events.json` files over
+the evaluation roster. It is not a median over throughput-only units. The reference rates
+were frozen when those traces were generated; their hardware is not recorded. This comparison
+does not re-run ABIDES on the evaluation instance and is not a measured same-instance speedup.
 
 That is also why this label is informational rather than disqualifying: it compares a
 host-measured rate against a rate frozen on unrecorded hardware, so it says "your run was not
@@ -395,13 +417,14 @@ device is an opportunity, not a requirement. Note that the admissibility gates (
 fills, Kendall-τ ≥ 0.999, message-ledger causality) punish approximation, and discrete-event
 simulation resists batching, so a GPU port is not a free win.
 
-Track-3 timing runs on the shared fixed-SKU box, with a node-fingerprint fairness rule
-enforced across submissions (per the organizers' evaluation-infrastructure policy, which is
-held in an organizer-only repository and not published here). Alongside the
-raw-throughput rank, the harness reports **secondary diagnostics** — speedup (vs. the
-CPU-ABIDES baseline), efficiency (events/sec per GPU- or CPU-core-hour), and memory
+Track 3's timing contract requires the same pinned, otherwise-idle instance, with submissions
+run sequentially; matching the GPU SKU alone is insufficient. The final measured runtime record
+and repeat/warm-up commitment remain release deliverables. The developer tools can report
+**secondary diagnostics** — speedup against a chosen CPU-ABIDES reference, efficiency
+(events/sec per GPU- or CPU-core-hour), and memory
 efficiency (events per peak resident byte) — derived from the `events.json`
-`peak_memory_bytes` / `gpu_seconds` telemetry. These are reported, not ranked.
+`peak_memory_bytes` / `gpu_seconds` telemetry. These are local reports, not official rankings;
+the official path omits these secondary diagnostics. See `../throughput/README.md` §8.
 
 ### Throughput classification labels
 
@@ -410,45 +433,34 @@ These are the canonical `FailureLabel` values (see
 
 | Condition | Label | Ranked? |
 |---|---|---|
-| events/sec above the recorded reference rate (see §3, "What the floor is actually compared against") | (no label; normal) | Yes |
-| events/sec at or below that recorded reference rate | `t3.throughput_nonimproving` | No — admissible but unranked |
+| Mean events/sec above the recorded reference mean (see §3) | (no label; normal) | Yes, if admissible |
+| Mean events/sec at or below that recorded reference mean | `t3.throughput_nonimproving` | Yes, if admissible |
 | Output dir/trace/`events.json` missing or malformed | `t3.parse_error` (+ `shared.schema.invalid_output`) | No — inadmissible |
 | Semantic equality check fails (Tier A fill sequence or Tier B proximity) | `t3.semantic_regression_fail` | No — inadmissible |
 | Stylized-fact ceiling breached (Family 5) | `t3.stylized_fact_breach` | No — inadmissible |
 | Sealed reference trace fails its SHA-256 checksum | `t3.reference_integrity_error` | Evaluation halted (operator-side) |
 
-`t3.throughput_nonimproving` is **not a disqualifying failure**: the submission is
-admissible (it ran cleanly and produced correct output) but will not appear in the
-ranked throughput leaderboard. Participants whose primary contribution is semantic
-accuracy rather than speed may still receive marks from other scoring dimensions.
+`t3.throughput_nonimproving` changes neither admission nor the ranked score. An otherwise
+admissible submission remains on the throughput leaderboard. There is no separate scoring
+dimension that compensates for failing a required correctness check.
 
 ---
 
 ## 4. Dependency Constraints
 
-The evaluation container is a fixed image; participants must vendor all
-non-standard dependencies inside their own Docker image. The following packages
-are **pre-installed** in the evaluation container and do not need to be vendored:
+Your participant image and the organizer's scoring image are separate environments. Include
+every runtime dependency in your image, including Python and standard scientific libraries if
+your simulator uses them. A package installed in the scorer is not available inside your image.
+The toolkit uses Python 3.13; the reference ABIDES image deliberately uses Python 3.11. Neither
+requires your simulator to share the scorer's Python environment.
 
-| Package | Minimum version |
-|---|---|
-| Python | 3.13.x |
-| NumPy | 1.26.x |
-| Pandas | 2.2.x |
-| SciPy | 1.13.x |
-
-The interpreter is **pinned at 3.13**, not a floor you may exceed: `nemoguardrails` and `nvidia-nat`
-both pin `<3.14`, so 3.13 is the newest version the org can run. Like the rest of the box spec, this
-pin is part of the hardware contract published before the **2026-08-10 compute-caps freeze** — it
-will not move under you mid-competition.
-
-The following packages are **allowed** but **must be vendored** (not assumed present):
+Packaging notes for common implementation choices:
 
 | Package | Notes |
 |---|---|
 | Numba | Include full conda/pip install in your Docker image; LLVM is large — plan image size accordingly |
-| CuPy | A GPU is attached to every timed run — build against the published CUDA toolkit version (§3) |
-| JAX | CPU-only JAX is pre-tested; for GPU JAX, pin the wheel to the published CUDA version (§3) |
+| CuPy | Bundle a runtime supporting B200 `sm_100`; compatible CUDA 12.x images work (see §3) |
+| JAX | Bundle the CPU or GPU dependencies your image needs; GPU builds must support the published device and driver |
 | Cython / compiled extensions | Must be compiled for `linux/amd64`; build in your Dockerfile |
 | Rust extensions (via PyO3/maturin) | Must be compiled for `linux/amd64`; multi-stage builds recommended |
 | Any other package | Vendor it; the network is disabled at runtime |
@@ -457,8 +469,6 @@ The following packages are **allowed** but **must be vendored** (not assumed pre
 make outbound connections will fail silently. Submissions must not depend on remote
 model weights, API calls, or package downloads at inference/simulation time.
 
-**Image size guidance:** the evaluation harness pulls images from the registry once
-per evaluation run and caches them. Images larger than 8 GiB will be accepted but
-may incur a pull-time penalty that is excluded from the throughput measurement. Keep
-your image lean: use multi-stage builds, strip debug symbols from compiled artifacts,
-and avoid bundling unnecessary large models.
+**Image size guidance:** keep your image lean with multi-stage builds and only the dependencies
+you need. This guide does not establish an image-size limit or a platform acceptance guarantee;
+the final transfer and resource instructions must specify those conditions.
