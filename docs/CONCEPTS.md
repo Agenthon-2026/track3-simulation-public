@@ -52,7 +52,8 @@ is far too slow for large-scale experiments. Track 3 asks participants to build 
 **ABIDES** (Agent-Based Interactive Discrete Event Simulator) is an open-source market
 simulator originally built by J.P. Morgan. Source:
 `https://github.com/jpmorganchase/abides-jpmc-public`. It is the **reference baseline**
-for Track 3 — your simulator must be faster than ABIDES while producing the same results.
+for Track 3 — use it to compare performance while preserving the required results. An
+admissible simulator does not have to beat ABIDES to receive a rank.
 
 ABIDES models a market as a set of **agents** (software programs that send buy/sell orders)
 and an **exchange** (a program that collects orders, matches them, and sends back fills).
@@ -433,15 +434,15 @@ Your simulator must write this number to `events.json` after each run:
 }
 ```
 
-The harness runs your simulator **five times** on the sealed benchmark scenario with five
-different seeds. It discards the first run (which is typically slower because the Python
-JIT needs to warm up), then takes the **median** of the remaining four runs. The median is
-robust to one outlier run caused by the operating system scheduler temporarily preempting
-your process.
+The local `throughput/timer.py` defaults to five runs with different derived seeds and discards
+the first as warm-up. Its median is a developer measurement. The official evaluation plan
+separately commits its repeat count and warm-up treatment; those final settings are not implied
+by the local defaults.
 
-You cannot fake `events_per_sec` — the harness checks that it is consistent with
-`n_events` divided by `wall_clock_sec`, within ±5%. Submissions that report an inflated
-number are disqualified.
+For an official unit, the scorer uses the median of the organizer-measured repeat rates. Every
+measured repeat must reproduce the scored output and event count. Your `events.json` rate is
+checked for consistency with `n_events / wall_clock_sec` within ±5%, but is not the ranked rate:
+the official numerator and elapsed time come from the organizer's trusted measurements.
 
 ---
 
@@ -449,8 +450,9 @@ number are disqualified.
 
 Track 3 is fundamentally about a trade-off: **speed vs. realism.** A trivially fast
 simulator that just returns an empty trace in 1 millisecond would win on speed but fails
-every correctness check. A correct but unmodified ABIDES simulation is the floor — your
-submission must be faster.
+every correctness check. A correct ABIDES simulation provides a local comparison; exceeding
+its recorded throughput is not an admission requirement. An admissible slower submission
+keeps its score and rank, with the informational `t3.throughput_nonimproving` label.
 
 The competition is designed so that the two checks are independent. You must pass
 **both** before you receive a leaderboard rank:
@@ -464,7 +466,7 @@ Submission pipeline:
         - Fail: inadmissible, no rank
         - Pass: proceed to ranking
     → Throughput ranking
-        - Score = median events/sec on sealed benchmark
+        - Score = arithmetic mean of per-unit rates over the complete evaluation roster
         - Higher is better
 ```
 
@@ -472,12 +474,10 @@ This means you cannot trade realism for speed. A simulator that is 10x faster bu
 corners on price-time priority will fail gate 1. A simulator that is 10x faster but batches
 order processing into large time steps — destroying volatility clustering — will fail gate 2.
 
-Beyond the primary raw-`events_per_sec` rank, the frontier itself is materialized by
-`throughput/frontier.py` (the speed-realism Pareto frontier), reported alongside the
-`secondary_diagnostics` on the final score (median speedup / efficiency / memory-efficiency)
-and four special awards in `throughput/awards.py` (Best GPU Acceleration, Best Speed-Realism
-Frontier, Best Latency-Semantics Preservation, Best Systems Diagnosis); the last is fed by
-the `throughput/simprofile.py` SimProfile verifier, which is diagnostic only and never an
-admissibility gate.
+The local tools also produce the speed-realism frontier (`throughput/frontier.py`), secondary
+diagnostics, and four award calculations (`throughput/awards.py`). These are developer reports,
+not an additional official score. The official path omits the secondary diagnostics; see
+`throughput/README.md` §8. The `throughput/simprofile.py` verifier is diagnostic only and never
+an admissibility gate.
 
 The fastest correct and realistic simulator wins.
