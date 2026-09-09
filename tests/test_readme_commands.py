@@ -28,6 +28,7 @@ import contextlib
 import importlib.util
 import io
 import re
+import shlex
 import sys
 from pathlib import Path
 
@@ -112,23 +113,42 @@ def test_readme_timer_invocations_are_accepted_by_the_timers_own_parser():
         # A path the README names must exist, or the command fails on the next line instead.
         scenario = argv[argv.index("--scenario") + 1]
         if "<" not in scenario:
-            assert (
-                _REPO / scenario
-            ).exists(), f"the README points `--scenario` at {scenario}, which is not in this repo"
+            assert (_REPO / scenario).exists(), (
+                f"the README points `--scenario` at {scenario}, which is not in this repo"
+            )
 
 
-def test_readme_installs_abides_the_way_the_baseline_image_does():
-    """The ABIDES install must name the two subdirectories, not a root-level extra.
+def _check_abides_instructions(
+    readme: str, baseline_readme: str, dockerfile: str
+) -> None:
+    """Check the Docker quick start and its linked, complete non-Docker recipe.
 
     `pip install -e ".[all]"` from the ABIDES root exits 1: no top-level setup.py/pyproject.toml
     and no `[all]` extra. `baselines/Dockerfile` is the recipe that is executed on every baseline
     build, so it -- not prose -- is the reference this test compares against.
     """
-    readme = _README.read_text(encoding="utf-8")
-    dockerfile = (_REPO / "baselines" / "Dockerfile").read_text(encoding="utf-8")
+    builds = _invocations(_bash_blocks(readme), "docker build ")
+    assert builds, "the README no longer shows how to build the baseline"
+    for command in builds:
+        argv = shlex.split(command)
+        assert (_REPO / argv[-1] / "Dockerfile").resolve() == (
+            _REPO / "baselines" / "Dockerfile"
+        ).resolve(), (
+            "the README's build context does not select the baseline Dockerfile"
+        )
+        assert "--platform=linux/amd64" in argv, (
+            "the baseline build must select linux/amd64"
+        )
+    assert "baselines/README.md" in readme, "the non-Docker recipe must be reachable"
 
-    installs = _invocations(_bash_blocks(readme), "abides-jpmc-public && pip install")
-    assert installs, "the README no longer shows how to install ABIDES"
+    installs = [
+        command
+        for command in _invocations(
+            _bash_blocks(readme + "\n" + baseline_readme), "pip install"
+        )
+        if "abides-" in command
+    ]
+    assert installs, "the baseline README no longer shows how to install ABIDES"
 
     for command in installs:
         assert '".[all]"' not in command and "'.[all]'" not in command, (
@@ -140,13 +160,57 @@ def test_readme_installs_abides_the_way_the_baseline_image_does():
                 f"the README's ABIDES install does not name {package}, which "
                 f"baselines/Dockerfile installs"
             )
-        assert (
-            "abides-gym" not in command
-        ), "the Scope section says abides-gym is out of scope; the install must not name it"
+        assert "abides-gym" not in command, (
+            "the Scope section says abides-gym is out of scope; the install must not name it"
+        )
 
     # The same two packages the image installs, and no third one.
     assert "abides-core" in dockerfile and "abides-markets" in dockerfile
     assert "/tmp/abides/abides-gym" not in dockerfile
+
+    commands = _invocations(_bash_blocks(baseline_readme), "git -C abides-jpmc-public ")
+    documented_patches = []
+    for command in commands:
+        argv = shlex.split(command)
+        if argv[3] == "apply":
+            assert len(argv) == 5 and argv[4].startswith("$PWD/baselines/patches/")
+            patch = Path(argv[4]).name
+            assert (_REPO / "baselines" / "patches" / patch).is_file()
+            documented_patches.append(patch)
+    image_patches = re.findall(
+        r"git -C /tmp/abides apply /tmp/patches/(\S+)", dockerfile
+    )
+    assert image_patches and documented_patches == image_patches, (
+        "the non-Docker recipe must apply every baseline overlay in Dockerfile order"
+    )
+
+
+def test_readme_installs_abides_the_way_the_baseline_image_does():
+    _check_abides_instructions(
+        _README.read_text(encoding="utf-8"),
+        (_REPO / "baselines" / "README.md").read_text(encoding="utf-8"),
+        (_REPO / "baselines" / "Dockerfile").read_text(encoding="utf-8"),
+    )
+
+
+def test_readme_baseline_guard_rejects_an_incomplete_overlay_recipe():
+    readme = _README.read_text(encoding="utf-8")
+    baseline_readme = (_REPO / "baselines" / "README.md").read_text(encoding="utf-8")
+    dockerfile = (_REPO / "baselines" / "Dockerfile").read_text(encoding="utf-8")
+    incomplete = "\n".join(
+        line
+        for line in baseline_readme.splitlines()
+        if not (line.startswith("git -C ") and "kernel_message_ledger.patch" in line)
+    )
+    assert incomplete != baseline_readme.rstrip("\n"), (
+        "negative control did not remove a patch"
+    )
+    try:
+        _check_abides_instructions(readme, incomplete, dockerfile)
+    except AssertionError as exc:
+        assert "every baseline overlay" in str(exc), f"unexpected refusal: {exc}"
+    else:
+        raise AssertionError("the README guard accepted an incomplete overlay recipe")
 
 
 def test_readme_does_not_claim_the_private_toolkit_can_be_installed():
