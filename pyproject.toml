@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "qfbench2-track-simulation"
-version = "0.1.0"
+version = "3.1.0"
 description = "Track 3 (Market Simulation) scoring package for QFBench 2.0 / Agenthon 2026."
 requires-python = ">=3.13"
 # The CodaBench scoring image installs this alongside qfbench2-common and calls

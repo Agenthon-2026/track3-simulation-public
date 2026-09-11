@@ -390,15 +390,20 @@ All scoring logic lives in the shared toolkit, which ships from its own public r
 Install it from there:
 
 ```bash
-pip install "qfbench2-common @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@v2.4.1#subdirectory=common"
+# Pin the tag, and pin this one: v2.3.1 rejects a descriptor the evaluation verifier accepts
+# (it requires at least one `models` entry; the current contract allows `"models": []`).
+# `pip show qfbench2-common` reports 2.3.1 from this tag -- the metadata lags the tag. That is
+# cosmetic and expected; the code is the v2.4.0 code.
+pip install "qfbench2-common[data] @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@v2.4.0#subdirectory=common"
 ```
 
 > ### Install the pinned tag, not a branch
 >
-> The command above selects the participant toolkit release. The separate compatibility-test
-> pin in CI (`QFBENCH2_COMMON_REF` in `.github/workflows/ci.yml`) remains `v2.3.1`; it does not
-> identify the installed competition scorer. Use the versioned runtime manifest for that identity.
-> **Pin a release rather than installing from a branch** so local dependencies do not drift.
+> `Agenthon-2026/Agenthon2026-public` carries the `qfbench2-common` package, and `v2.4.0` is the
+> tag CI installs (`QFBENCH2_COMMON_REF` in `.github/workflows/ci.yml`) and the tag whose descriptor
+> contract matches what the scorer accepts. Do not pin `v2.3.1`: it refuses a descriptor the
+> verifier accepts, demanding a non-empty `models` where the current contract allows `"models": []`. **Pin a tag rather than installing from a branch** — an unpinned toolkit is how a local
+> result and a scored result come to disagree without either side noticing.
 >
 > Use **Python 3.13** for the toolkit and scoring tools. The ABIDES baseline has its own
 > Python 3.11 environment, as described in `baselines/README.md`.
@@ -417,7 +422,7 @@ baseline image. Run every step from this repository's root. The Docker build fet
 ABIDES source and applies all four required patches in order.
 
 ```bash
-pip install "qfbench2-common @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@v2.4.1#subdirectory=common"
+pip install "qfbench2-common[data] @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@v2.4.0#subdirectory=common"
 docker build --platform=linux/amd64 -t track3-abides-baseline:latest baselines/
 ```
 
