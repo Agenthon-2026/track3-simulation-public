@@ -23,3 +23,9 @@ __all__ = [
     "build_verifier",
     "cluster_key",
 ]
+
+# The shared scorer version (see scoring.SCORER_VERSION). Re-exported so a
+# participant can read it without importing the scoring module.
+from .scoring import SCORER_VERSION, scorer_identity  # noqa: E402
+
+__version__ = SCORER_VERSION
