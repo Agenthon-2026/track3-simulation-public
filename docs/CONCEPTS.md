@@ -309,8 +309,7 @@ clustering of big moves. The stylized-fact check catches this.
 
 Before a submission is ranked by speed, it must pass all four gated stylized-fact checks
 (KS distance, ACF of |r_t|, Hill tail exponent, and depth-distribution JS — the first three
-are also computed by the local `regression_suite` pre-check; the depth check runs at sealed
-scoring, where order-book depth histograms are reconstructed). The intraday
+are all computed by the local `regression_suite` pre-check, including the depth divergence). The intraday
 U-shape below is described for context but is not gated by a ceiling:
 
 ### Fat tails (heavy tails)
@@ -332,8 +331,10 @@ measure this with the **autocorrelation function of |r_t|** (ACF of |r_t|).
 At the same time, the raw returns `r_t` themselves should NOT be autocorrelated (i.e.,
 knowing that the price went up today should not tell you much about tomorrow's direction).
 
-The ceiling: the L2 difference between your ACF-of-|r_t| curve and the reference curve
-(over lags 1 to 20) must be ≤ 0.12.
+The ceiling: the root-mean-square difference between your ACF-of-|r_t| and the reference's,
+evaluated at lags 1, 5, 10, 20 and 50, must be ≤ 0.12. It is an RMS over those five lags, not an
+L2 norm over every lag from 1 to 20, so computing it the other way will not reproduce the number
+the scorer reports.
 
 ### Intraday seasonality (U-shape)
 

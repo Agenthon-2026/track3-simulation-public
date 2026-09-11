@@ -8,7 +8,7 @@ title           = "Vectorized Matching Engine — Price-Time Priority Benchmark"
 split           = "public-dev"
 scenario_family = "throughput-scale"
 scenario_file   = "scenario.json"
-description     = "Speed up the ABIDES LOB matching engine for >=5x throughput over the unmodified Python baseline -- by vectorizing on CPU, by offloading to the attached GPU, or both; the ranked metric is raw events/sec and using the GPU is optional -- while exactly preserving price-time priority, cancel atomicity, STP, and partial-fill semantics (26-scenario regression) and keeping stylized-fact divergences (KS/ACF/Hill/depth) under the Cont (2001) ceilings."
+description     = "Speed up the ABIDES LOB matching engine for >=5x throughput over the unmodified Python baseline -- by vectorizing on CPU, by offloading to the attached GPU, or both; the ranked metric is raw events/sec and using the GPU is optional -- while exactly preserving price-time priority, cancel atomicity, STP, and partial-fill semantics (65-scenario regression) and keeping stylized-fact divergences (KS/ACF/Hill/depth) under the Cont (2001) ceilings."
 
 [metadata]
 author_name              = "QFBench2 Organising Committee"

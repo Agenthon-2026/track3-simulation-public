@@ -118,7 +118,7 @@ Tolerances are divided into two tiers. The tier assignment is fixed per family; 
 > | Tier-B statistical check | on Tier-B scenarios, *in addition to* Tier A | **instead of** Tier A |
 > | Stylized-fact ceilings | on **every** scenario | only on Family 5 |
 >
-> Both call the same functions in `../qfbench2_track_simulation/semantics.py`, so a metric never means two different things. What differs is which checks are applied where. A green run here is therefore a *superset* guarantee: it implies the official gate's semantic verdict. A red run here on a Tier-B scenario's fill sequence, or on a non-Family-5 scenario's stylized facts, is worth fixing but is not on its own an official failure.
+> Both call the same functions in `../qfbench2_track_simulation/semantics.py`, so a metric never means two different things. What differs is which checks are applied where. A green run here is necessary but not sufficient. This suite applies some checks more widely than the official gate and omits others entirely, so it does not imply the official verdict: in particular it never reads `message_trace.parquet`, so the message-ledger checks the official gate runs are not exercised here at all. A red run here on a Tier-B scenario's fill sequence, or on a non-Family-5 scenario's stylized facts, is worth fixing but is not on its own an official failure.
 
 ### Tier A — Structural Semantic Equality (Families 1, 3, 6, 7, 8)
 

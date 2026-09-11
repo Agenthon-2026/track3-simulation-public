@@ -398,20 +398,23 @@ comparison. `semantics.check_tier_b` runs on every Tier-B unit regardless of fam
 stochastic; what the ceilings pin is that your market's return distribution and spread level match
 the reference's, which they will only if your value traders react to the oracle correctly.
 
-### How the sealed variants are harder
+### How the sealed variants differ
 
-The sealed Family 4 scenarios stress the jump-diffusion oracle harder than any public
-example:
+The sealed Family 4 scenarios move along the same axes as the public examples rather than beyond
+them on every one:
 
-- **Larger jump magnitudes** — a sudden large jump tests whether value traders respond
-  aggressively (buying or selling enough to pull the price toward the new fundamental value).
-- **Higher jump rates** — rapid successions of jumps stress the oracle-update and
-  agent-reaction loop under repeated disturbance.
-- **Mean-reversion extremes** — very slow and very fast oracle mean-reversion rates stress
-  value-trader behavior at both ends.
+- **Slow mean reversion** — the sealed set reaches slower oracle mean-reversion than any public
+  unit. This is the axis least covered by what you can test locally, so it is the one worth
+  stressing yourself.
+- **Jump magnitude and rate** — these stay inside the range the public units already span.
+  `t3-sf-02-heavy-jump-tails` is more extreme than any sealed Family 4 scenario on both, so it is
+  a valid upper bound to develop against.
 
 This family ships **no public scenarios** — every Family 4 scenario is sealed. Develop against the
-Family 2 units, which use the same Tier-B check and the same oracle machinery. Specific sealed
+Tier-B units that exercise the jump path: `t3-sf-01` through `t3-sf-07` and
+`t3-ca-fat-tail-jumps`. The Family 2 units share the agent-mix machinery but set
+`jump_intensity = 0.0`, so no jump ever occurs in them; use them for population effects, not for
+oracle response. Specific sealed
 jump rates, parameters and scenario counts are not disclosed before the competition ends.
 
 ### Common mistakes
@@ -423,11 +426,11 @@ jump rates, parameters and scenario counts are not disclosed before the competit
 
 2. **Smoothing the jump away.** Applying a low-pass filter or interpolation to the oracle
    series turns an instantaneous jump into a gradual drift; the mid-price then lags the
-   fundamental value and the RMSE check fails.
+   fundamental value, which distorts the mid-price return distribution and fails the KS ceiling.
 
 3. **Miscalibrated value-trader thresholds.** If the value trader's buy/sell threshold is
-   too wide, the mid-price will not track the oracle closely enough to pass the coverage
-   check.
+   too wide, the market stays wider than the reference and the time-averaged spread misses the
+   tolerance.
 
 ---
 
@@ -540,15 +543,21 @@ statistics, at the same four ceilings, computed by the same shared code you can 
 Family 6 is the speed test. It runs your simulator on the largest, most demanding scenarios
 and measures how fast it goes — while still checking that the output is correct.
 
-The sealed Family 6 benchmark scenario (`SS-BENCH`) is the scenario used to rank all
-admissible submissions on the leaderboard. Its parameters — horizon, agent population, book
-depth and event count — are withheld until after the competition. What is publicly stated is only
-its role: it is a throughput-scale scenario of the same shape as the public Family 6 units, run
-through the same `simulate` interface and the same Tier-A checks.
+The sealed Family 6 benchmark scenario (`SS-BENCH`) is the largest and most demanding scenario in
+the suite. Its parameters — horizon, agent population, book depth and event count — are withheld
+until after the competition. What is publicly stated is only its role: it is a throughput-scale
+scenario of the same shape as the public Family 6 units, run through the same `simulate` interface
+and the same Tier-A checks.
+
+**`SS-BENCH` is not the only scenario that decides your rank.** An earlier revision of this page
+said it was. Your leaderboard score is the **mean of your throughput over every unit in the
+roster**, and a unit you fail contributes **zero** to that mean rather than dropping out of it. So
+one failed unit costs you a proportion of your rank, and there is no unit you can afford to ignore
+in favour of the benchmark.
 
 The public Family 6 units exercise that interface and those checks at smaller scale. Use them to
-develop and profile your implementation. They are not a good predictor of your leaderboard rank,
-because the sealed benchmark is more demanding along parameters you cannot see.
+develop and profile your implementation. They are not a good predictor of your absolute throughput
+on the sealed benchmark, which is more demanding along parameters you cannot see.
 
 A **BatchMarketSim** variant (the `t3-gbatch-*` units, invoked via the `simulate-batch`
 verb) runs N independent sub-scenarios in one pass under this family. Each sub is checked by

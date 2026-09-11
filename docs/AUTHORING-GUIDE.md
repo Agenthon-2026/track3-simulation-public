@@ -125,26 +125,41 @@ per-agent parameters live in **`agent_configs`**; the per-type counts in `agent_
 must match `agent_mix`. Example `agent_mix`:
 
 ```json
-"agent_mix": { "ExchangeAgent": 1, "ZeroIntelligenceAgent": 20 }
+"agent_mix": { "NoiseTrader": 3, "MarketMaker": 1 }
 ```
 
 ```json
 "agent_configs": [
   {
-    "agent_type": "abides_fork.agents.ExchangeAgent",
-    "count": 1,
-    "params": {}
+    "agent_type": "NoiseTrader",
+    "count": 3,
+    "params": {
+      "order_size_mean": 10,
+      "order_size_std": 2,
+      "arrival_rate_hz": 2.0,
+      "price_offset_ticks": 5
+    }
   },
   {
-    "agent_type": "abides_fork.agents.ZeroIntelligenceAgent",
-    "count": 20,
-    "params": { "wake_up_freq": "60s", "order_size_min": 1, "order_size_max": 100 }
+    "agent_type": "MarketMaker",
+    "count": 1,
+    "params": {
+      "spread_ticks": 2,
+      "depth_levels": 3,
+      "size_per_level": 10,
+      "rebalance_interval_ns": 1000000000
+    }
   }
 ]
 ```
 
-- **`agent_type`** — fully qualified Python class name in the ABIDES fork. Must exist in
-  the fork's registered agent registry.
+The exchange is not listed here. It is constructed by the harness, so `agent_configs` carries only
+the trading population. The example above is the real `agent_configs` of
+`units/t3-s001-price-time-priority`, so it runs as written.
+
+- **`agent_type`** — a bare key from the fork's `AGENT_REGISTRY`, not a Python import path. The
+  loader looks the string up directly, so a dotted class path will not resolve. The registry
+  contains `NoiseTrader`, `MarketMaker`, `ValueTrader` and `MomentumTrader`.
 - **`count`** — number of independent instances. Each gets a deterministically derived
   sub-seed.
 - **`params`** — agent-specific parameters. See the agent class docstring. Unknown keys

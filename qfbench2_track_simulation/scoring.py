@@ -73,7 +73,7 @@ _FAMILY_NUM: dict[str, int] = {
     "calibration-stylized-facts": 5,
     "throughput-scale": 6,
     "exchange-protocol": 7,  # MP / GPU-LOB-Core: Layer-2 exchange responses (g3.5). Tier-A via card.
-    "reactive-agent": 8,  # RA: endogenous reaction to a scheduled intervention. Tier-B + mandatory ledger.
+    "reactive-agent": 8,  # RA: endogenous reaction to a scheduled intervention. Tier-A (see TIER_A_FAMILIES) + mandatory ledger.
 }
 
 #: Families whose single-market units carry a message ledger unless the card says otherwise.
