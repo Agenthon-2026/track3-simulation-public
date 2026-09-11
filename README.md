@@ -365,7 +365,11 @@ All scoring logic lives in the shared toolkit, which ships from its own public r
 Install it from there:
 
 ```bash
-pip install "qfbench2-common @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@v2.3.1#subdirectory=common"
+# Pin the tag, and pin this one: v2.3.1 rejects a descriptor the evaluation verifier accepts
+# (it requires at least one `models` entry; the current contract allows `"models": []`).
+# `pip show qfbench2-common` reports 2.3.1 from this tag -- the metadata lags the tag. That is
+# cosmetic and expected; the code is the v2.4.0 code.
+pip install "qfbench2-common @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@v2.4.0#subdirectory=common"
 ```
 
 > ### Install the pinned tag, not a branch
@@ -393,7 +397,7 @@ from *this* repository, not from the ABIDES checkout.
 ```bash
 git clone https://github.com/jpmorganchase/abides-jpmc-public
 (cd abides-jpmc-public && pip install -e abides-core -e abides-markets)
-pip install "qfbench2-common @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@v2.3.1#subdirectory=common"
+pip install "qfbench2-common @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@v2.4.0#subdirectory=common"
 ```
 
 The third line pins the toolkit tag — see "Installing the shared toolkit" above, which is where
