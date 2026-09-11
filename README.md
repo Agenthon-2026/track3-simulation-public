@@ -374,9 +374,10 @@ pip install "qfbench2-common @ git+https://github.com/Agenthon-2026/Agenthon2026
 
 > ### Install the pinned tag, not a branch
 >
-> `Agenthon-2026/Agenthon2026-public` carries the `qfbench2-common` package, and `v2.3.1` is the
-> tag CI installs (`QFBENCH2_COMMON_REF` in `.github/workflows/ci.yml`) and the tag the scorer
-> runs. **Pin a tag rather than installing from a branch** — an unpinned toolkit is how a local
+> `Agenthon-2026/Agenthon2026-public` carries the `qfbench2-common` package, and `v2.4.0` is the
+> tag CI installs (`QFBENCH2_COMMON_REF` in `.github/workflows/ci.yml`) and the tag whose descriptor
+> contract matches what the scorer accepts. Do not pin `v2.3.1`: it refuses a descriptor the
+> verifier accepts, demanding a non-empty `models` where the current contract allows `"models": []`. **Pin a tag rather than installing from a branch** — an unpinned toolkit is how a local
 > result and a scored result come to disagree without either side noticing.
 >
 > Requires **Python 3.13 or newer**. On 3.12 the install resolves and then fails at import with
