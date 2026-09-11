@@ -133,6 +133,8 @@ jobs:
         run: python -m pytest tests/test_malicious_output.py -q
       - name: Contract-boundary tests (Hub C1/C2/C5/C7 fixtures)
         run: python -m pytest tests/test_contract_boundary.py -q
+      - name: Shared scorer version (pyproject <-> SCORER_VERSION <-> package)
+        run: python -m pytest tests/test_scorer_version.py -q
       # Re-run with the toolkit present so the cluster_key check actually executes: it imports
       # qfbench2_track_simulation, so in the firewall job it reports SKIP rather than running.
       # QFB2_T3_REQUIRE_TOOLKIT turns that SKIP into a FAILURE here, because in this job the

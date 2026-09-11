@@ -12,20 +12,22 @@ Exposes:
 
 from .scoring import (
     LEADERBOARD_SORT,
+    SCORER_VERSION,
     build_developer_verifier,
     build_verifier,
     cluster_key,
+    scorer_identity,
 )
 
 __all__ = [
     "LEADERBOARD_SORT",
+    "SCORER_VERSION",
     "build_developer_verifier",
     "build_verifier",
     "cluster_key",
+    "scorer_identity",
 ]
 
-# The shared scorer version (see scoring.SCORER_VERSION). Re-exported so a
-# participant can read it without importing the scoring module.
-from .scoring import SCORER_VERSION, scorer_identity  # noqa: E402
-
+# The shared scorer version (see scoring.SCORER_VERSION), so a participant can read it
+# without importing the scoring module.
 __version__ = SCORER_VERSION
