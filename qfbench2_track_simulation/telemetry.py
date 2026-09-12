@@ -26,11 +26,20 @@ factory, and stamps ``rankable = False`` on everything it emits.
    instance", so a shared or thermally throttled window is not a comparable measurement.
 3. **Every repeat is validated, not just the last.** The plan commits ``repeats`` and
    ``warmup_discarded``; C2 must carry exactly that many repeat records, each individually
-   rankable, and — because a Track 3 scenario is deterministic given its seed — each measured
-   repeat's ``output_tree_digest`` and ``event_count`` must equal the tree that was actually
-   scored. That is what closes alternating fast-invalid / slow-valid repeats *regardless of which
-   repeat happened to be retained*: a repeat that produced different bytes cannot match the digest
-   of the tree the semantic gates read.
+   rankable, and each measured repeat's ``output_tree_digest`` and ``event_count`` must equal the
+   tree that was actually scored. That is what closes alternating fast-invalid / slow-valid repeats
+   *regardless of which repeat happened to be retained*: a repeat that produced different bytes
+   cannot match the digest of the tree the semantic gates read.
+
+   **Known defect, `track3-simulation-public#5` / `Agenthon2026#116`.** The digest half of that is
+   currently unsatisfiable by an honest submission. ``output_tree_digest`` is a byte hash of the
+   whole ``/output`` tree; ``events.json`` is inside it and must carry a real ``wall_clock_sec``;
+   so the digest changes on every repeat for reasons that have nothing to do with the simulation.
+   The determinism claim holds only of :data:`limits.STABLE_OUTPUT_FILES`, and C2 gives Track 3 no
+   per-file digest to compare that subset against. The repair belongs to the producer of
+   ``output_tree_digest`` and is tracked in those issues; the acceptance test for it is
+   ``tests/test_telemetry_binding.py::test_an_honest_submission_is_not_refused_for_reporting_its_real_wall_clock``,
+   which XFAILs until it lands.
 4. **The numerator is the Runner's, and it must equal the reference.** R-3 gives the row count to
    the Runner; Track 3 verifies it against the organizer's reference count. A padded trace is
    refused at the numerator as well as by the semantic gate, so extra rows can never buy rank.
@@ -216,10 +225,21 @@ def _assert_repeats_reproduce_scored_tree(
 ) -> None:
     """Every measured repeat must have produced the bytes the semantic gates actually read.
 
-    A Track 3 scenario is deterministic given its seed, so this is a property an honest submission
-    satisfies for free. It is also the only check that reaches the repeats whose output was *not*
-    retained, which is what makes alternating fast-invalid / slow-valid repeats fail regardless of
-    which one happened to be last.
+    This is the only check that reaches the repeats whose output was *not* retained, which is what
+    makes alternating fast-invalid / slow-valid repeats fail regardless of which one happened to be
+    last. That protection is why the digest comparison has not simply been deleted in response to
+    the defect below.
+
+    **It is not a property an honest submission satisfies for free**, which this docstring used to
+    claim. Determinism given the seed holds of the parquet outputs, not of the whole tree:
+    ``events.json`` is inside the hashed tree and must report a real ``wall_clock_sec``, so an
+    honest submission's digest differs on every repeat and is refused here
+    (`track3-simulation-public#5`, `Agenthon2026#116`). Track 3 cannot narrow the comparison
+    itself, because C2 carries one opaque whole-tree digest per repeat and the repeat key set is
+    closed. See :data:`qfbench2_track_simulation.limits.VOLATILE_OUTPUT_FILES` for the set that
+    has to come out of the producer's digest, and
+    :data:`qfbench2_track_simulation.limits.VOLATILE_EVENTS_FIELDS` for the fields inside
+    ``events.json`` that move.
     """
     scored_digest = record.bindings["sanitized_tree_digest"]
     divergent_digest = [
