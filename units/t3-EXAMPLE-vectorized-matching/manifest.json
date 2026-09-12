@@ -7,7 +7,7 @@
       "path": "card.toml",
       "role": "fixture",
       "license": "CC-BY-4.0",
-      "sha256": "4e6f5d9571f54dee590c7f5d1963eb2970175f8cc46d3d4c8030ed97b456830f",
+      "sha256": "0aaf1f379493f98230693a78d3059692eae4f16530940395b27b6a37f3e7e12d",
       "split": "public-dev",
       "redistributable": true,
       "bytes": 2856

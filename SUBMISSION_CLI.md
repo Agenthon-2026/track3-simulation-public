@@ -9,7 +9,7 @@ docker run --rm \
   --network=none|qfb2-eval \             # "none" (simulation) or the internal eval network (agent tracks) — see "Network modes"
   --cpus=<card.cpus> --memory=<card.memory> [--gpus all] \
   -v <unit-dir>:/input:ro \              # read-only inputs — the UNIT DIRECTORY itself is mounted at /input
-  -v <run>/output:/output \              # outputs (deliverables + logs); a normal read-write bind
+  -v <run>/output:/output \              # deliverables ONLY (T3: a log file here is path_not_allowed)
   [-v <run>/output:/app/output] \       # T1 ONLY: the same host dir, also at the QFBench path (see invariant 8)
   <SUBMISSION_IMAGE> <verb> [args]
 ```
