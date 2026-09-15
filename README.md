@@ -23,7 +23,9 @@ package and no `[all]` extra, so there is no repository-root install that could 
 anyway.
 
 New to this track? Read `docs/CONCEPTS.md` first — it defines every term in plain English.
-Then come back here for the submission format and quick-start steps.
+Then come back here for the submission format and quick-start steps. The current Development
+service provides provisional practice scores; see [how throughput is measured](#how-throughput-is-measured)
+for the distinction from planned official Final timing.
 
 ---
 
@@ -321,8 +323,27 @@ under `run_outputs/` and `reference_traces/`.
 
 ## How throughput is measured
 
-For admissible submissions, the ranked number is `events_per_sec`, **measured by the organizer's
-runner, never read from your `events.json`**. Per unit:
+### Provisional Development
+
+The current Development service uses a shared worker queue and the developer scoring profile
+(`build_developer_verifier`), with `rankable = False`. Its per-unit throughput comes from your
+reported `events_per_sec`, checked for consistency and subject to the existing admissibility
+gates. Report real event counts and elapsed time. Development scores and displayed standings
+are practice feedback; they do not establish official comparable timing across submissions or
+Final ranking. Development does not promise a dedicated, otherwise-idle timing instance.
+
+### Planned official Final timing
+
+Official Final timing requires the organizer's production path and validated timing evidence.
+The production scorer's existing requirements below are **not the current Development timing
+service**. The repeat producer and validator must be made consistent and verified together
+before this path is ready for Final. In particular, the current whole-output-tree comparison
+includes changing telemetry such as elapsed time; participants must keep reporting real timing,
+not replace it with constants to make repeats match. The correction and worked examples still
+need a versioned publication. See the [acknowledged timing issue](https://github.com/Agenthon-2026/track3-simulation-public/issues/5).
+
+In the production scorer, the official number is `events_per_sec`, **measured by the organizer's
+runner, never read from your `events.json`**. Its current per-unit requirements are:
 
 1. The candidate image is run several times on the same scenario. How many repeats, and whether
    the first is discarded as warm-up, are committed in advance in the evaluation plan — they are
@@ -348,6 +369,8 @@ scenario **family** rather than by unit, because units within a family share a g
 agent mix and so are correlated (see `cluster_key` in `qfbench2_track_simulation/scoring.py`).
 Tie-breaking below the score is a platform-level rule and is not specified in this repository —
 do not assume the CI lower bound decides it.
+
+### Local timing
 
 Measure your local baseline:
 
