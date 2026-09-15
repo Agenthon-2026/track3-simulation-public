@@ -516,9 +516,16 @@ ledgers go through pandas `Int64` so the parquet pandas
 metadata restores integers. Hybrid already wrote DataFrames.
 No GPU. Family 1 traces unchanged.
 
-## Remaining 10× path
+## Current championship path — 2026-09-15
 
-~532k / ~481k → ~1.4M / ~1.0M is still ~2.6–2.9×. Leftover Python
-is pyarrow table build at the end of the run (event traces still
-skip the DataFrame). After-close stays Step 5. GPU only for
-independent `simulate-batch`.
+The current execution plan is [Submission Readiness](../../docs/SUBMISSION-READINESS.md).
+The tables above are historical local experiments; their best rates are not official
+scores or directly comparable with the later amd64-container verification on macOS ARM.
+
+Keep the exact CPU engine. First update packaging to toolkit v2.4.1 and team-claim 2.0,
+then validate the complete public workload and measure end-to-end container time.
+The official score averages per-unit rates over the entire evaluation roster, so
+choose optimizations by their measured contribution to that mean. Profile startup,
+Arrow/parquet output and batch scheduling before choosing the next implementation.
+The earlier 1.4M / 1.0M targets do not establish a winning threshold. The large
+exemplar and the organizer's production repeat-digest repair remain open readiness items.
