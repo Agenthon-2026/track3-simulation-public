@@ -417,8 +417,11 @@ the depth distribution is JSD ≤ 0.10.
 
 ## 11. Events per second — the speed metric
 
-Your ranking score is `events_per_sec`: the number of exchange events your simulator
-processed per second of real wall-clock time.
+Throughput is `events_per_sec`: the number of exchange events your simulator processed per
+second of real wall-clock time. The current provisional Development service uses checked
+self-reported rates and the developer profile (`rankable = False`) on a shared worker queue.
+Its practice scores and standings do not establish official comparable timing. See
+[the timing profiles](../README.md#how-throughput-is-measured) for the planned official Final path.
 
 Your simulator must write this number to `events.json` after each run:
 
@@ -440,8 +443,8 @@ the first as warm-up. Its median is a developer measurement. The official evalua
 separately commits its repeat count and warm-up treatment; those final settings are not implied
 by the local defaults.
 
-For an official unit, the scorer uses the median of the organizer-measured repeat rates. Every
-measured repeat must reproduce the scored output and event count. Your `events.json` rate is
+For the planned official Final path, the production scorer requires the median of the
+organizer-measured repeat rates. Every measured repeat must reproduce the scored output and event count. Your `events.json` rate is
 checked for consistency with `n_events / wall_clock_sec` within ±5%, but is not the ranked rate:
 the official numerator and elapsed time come from the organizer's trusted measurements.
 

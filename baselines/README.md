@@ -4,7 +4,10 @@
 
 Use the ABIDES baseline to check your simulator and compare local performance. Correctness
 determines admission; an admissible simulator remains ranked even below the recorded baseline
-rate. `throughput/timer.py` is a local developer tool, not the official timing protocol.
+rate. `throughput/timer.py` is a local developer tool. The current Development service uses
+provisional developer-profile scoring on a shared queue (`rankable = False`), based on checked
+self-reported throughput. Official Final timing remains a separate release requirement; see
+[the timing profiles](../README.md#how-throughput-is-measured).
 
 > **No throughput figure on this page was measured on the evaluation fleet, and the ~65,000
 > events/sec ABIDES baseline is withdrawn as a target.** The 2026-06-23 figures were written when
@@ -225,8 +228,8 @@ It is **not open-sourced** and is not available to participants. It serves two p
 
 Achieving or exceeding this figure is not required and earns nothing. **There is no normalized
 throughput score.** Ranking uses the arithmetic mean of per-unit `events_per_sec` over the
-complete evaluation roster, descending (`LEADERBOARD_SORT = "desc"`). Each official unit rate
-is the median of its measured repeat rates. No normalization maps that aggregate onto a 0–1
+complete evaluation roster, descending (`LEADERBOARD_SORT = "desc"`). For the planned official
+Final path, each unit rate is the median of its measured repeat rates. No normalization maps that aggregate onto a 0–1
 mark, and the vectorized reference figure is not the top of the scoring scale.
 An earlier revision of this page said submissions in this range "receive maximum normalized
 throughput marks" and called this simulator the "upper reference point in the scoring
@@ -332,9 +335,11 @@ the evaluation roster. It is not a median over throughput-only units. The refere
 were frozen when those traces were generated; their hardware is not recorded. This comparison
 does not re-run ABIDES on the evaluation instance and is not a measured same-instance speedup.
 
-That is also why this label is informational rather than disqualifying: it compares a
-host-measured rate against a rate frozen on unrecorded hardware, so it says "your run was not
-faster than the recorded baseline run", not "your simulator is slow". You still receive a rank.
+That is also why this label is informational rather than disqualifying: it compares the
+submission's per-unit rates against rates frozen on unrecorded hardware. Development uses
+checked self-reported rates; the planned official Final path requires host-measured rates.
+Neither comparison establishes a measured same-instance speedup. The label does not remove
+an admissible score or standing.
 
 **Official benchmark hardware:**
 
@@ -417,9 +422,13 @@ device is an opportunity, not a requirement. Note that the admissibility gates (
 fills, Kendall-τ ≥ 0.999, message-ledger causality) punish approximation, and discrete-event
 simulation resists batching, so a GPU port is not a free win.
 
-Track 3's timing contract requires the same pinned, otherwise-idle instance, with submissions
-run sequentially; matching the GPU SKU alone is insufficient. The final measured runtime record
-and repeat/warm-up commitment remain release deliverables. The developer tools can report
+The planned **official Final** timing contract requires the same pinned, otherwise-idle
+instance, with submissions run sequentially; matching the GPU SKU alone is insufficient.
+The current **provisional Development** service uses a shared worker queue and does not provide
+that timing isolation. Its developer-profile results carry `rankable = False`.
+The measured runtime identity, committed repeat count and warm-up treatment, and a validated
+repeat producer/validator remain Final release requirements. No official repeat count or
+warm-up choice is established by the local timer's defaults. The developer tools can report
 **secondary diagnostics** — speedup against a chosen CPU-ABIDES reference, efficiency
 (events/sec per GPU- or CPU-core-hour), and memory
 efficiency (events per peak resident byte) — derived from the `events.json`
