@@ -1,11 +1,8 @@
-"""Participant packaging must not turn an unconfirmed identity into a submission."""
+"""Delivery uses the official C5 and descriptor-bound team claim, never a fake ID."""
 
-import copy
 import importlib.util
 import json
 from pathlib import Path
-import subprocess
-import sys
 import zipfile
 
 import pytest
@@ -16,172 +13,169 @@ spec = importlib.util.spec_from_file_location(
 )
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
+TEST_KEY = "fixture-only-team-key-qualification"
 
 
 @pytest.fixture
 def candidate():
-    candidate = module.load_json(ROOT / "submission/candidate.json")
-    candidate.update(
-        confirmed_c5_team_id=None, team_id_mapping_source=None, competition_url=None
-    )
-    return candidate
+    return module.load_json(ROOT / "submission/candidate.json")
 
 
 @pytest.fixture
-def ready(candidate):
-    result = copy.deepcopy(candidate)
-    result.update(
-        confirmed_c5_team_id="organizer-assigned-test-team",
-        team_id_mapping_source="https://example.org/official-mapping",
-        competition_url="https://example.org/competition",
-    )
-    return result
+def key_file(tmp_path):
+    path = tmp_path / "key"
+    path.write_text(TEST_KEY)
+    path.chmod(0o600)
+    return path
 
 
-def evidence(candidate):
-    from regression_suite.build_reference_cache import scenario_index
-
-    body = module.descriptor(candidate)
-    count = len(scenario_index())
+@pytest.fixture
+def delivery(candidate):
     return {
-        "image": module.SubmissionDescriptor.from_mapping(body).image_reference(),
+        "image": module.candidate_image(candidate),
         "status": "passed",
         "profile": "developer",
         "rankable": False,
-        "regression": {
-            "total_scenarios": count,
-            "passed": count,
-            "failed": 0,
-            "errored": 0,
-        },
-        "batch_units": [unit.name for unit in module.batch_units()],
-        "anonymous_registry_access": True,
-        "repeats": {
-            unit.name: {
-                "runs": 3,
-                "parquet_sha256": {
-                    name: "a" * 64 for name in module.repeat_artifacts(unit)
-                },
-            }
-            for unit in module.repeat_units()
+        "scope": "delivery",
+        "identity": module.delivery_identity(),
+        "anonymous_pull": True,
+        "platform": "linux/amd64",
+        "runs": {
+            verb: {"returncode": 0, "n_events": 10, "reported_n_events": 10}
+            for verb in ("simulate", "simulate-batch")
         },
     }
 
 
-def test_pending_identity_refuses_zip(candidate, tmp_path):
-    with pytest.raises(ValueError, match="Submission blocked"):
-        module.package(candidate, evidence(candidate), tmp_path / "submission.zip")
-    assert not list(tmp_path.iterdir())
+@pytest.fixture(autouse=True)
+def no_network(monkeypatch):
+    monkeypatch.setattr(
+        module,
+        "anonymous_pull",
+        lambda c, p, execution_platform="linux/amd64": {
+            "image": module.candidate_image(c),
+            "anonymous_pull": True,
+            "platform": execution_platform,
+        },
+    )
 
 
-def test_package_roundtrip_and_reproducible_bytes(ready, tmp_path):
+def test_descriptor_has_no_fictional_identity(candidate):
+    template = module.descriptor(candidate)
+    assert "team_id" not in template
+    assert "descriptor_digest" not in template
+    assert template["models"] == []
+    body = module.descriptor(candidate, TEST_KEY)
+    parsed = module.SubmissionDescriptor.from_mapping(body)
+    assert parsed.models == () or parsed.models == []
+    assert parsed.team_id.startswith("team-")
+
+
+@pytest.mark.parametrize("phase", ["dev", "final"])
+def test_official_package_roundtrip(candidate, delivery, key_file, tmp_path, phase):
+    candidate["phase"] = phase
     first, second = tmp_path / "first.zip", tmp_path / "second.zip"
-    module.package(ready, evidence(ready), first)
-    module.package(ready, evidence(ready), second)
+    result = module.package(candidate, delivery, first, key_file)
+    module.package(candidate, delivery, second, key_file)
     assert first.read_bytes() == second.read_bytes()
-    with zipfile.ZipFile(first) as archive:
-        assert archive.namelist() == ["submission.json"]
-        parsed = module.SubmissionDescriptor.from_mapping(
-            json.loads(archive.read("submission.json"))
-        )
-    assert parsed.team_id == ready["confirmed_c5_team_id"]
-    assert parsed.track == "simulation" and parsed.phase == "dev"
-    assert parsed.category == "simulator"
-    assert len(parsed.models) == 1
-    assert parsed.models[0].name == "none-deterministic-simulator"
-    assert parsed.models[0].revision == ready["image"]["digest"]
+    assert result["rankable"] is False and result["scope"] == "G1"
+    with zipfile.ZipFile(first) as z:
+        assert sorted(z.namelist()) == ["submission.json", "team-claim.json"]
+        body = json.loads(z.read("submission.json"))
+        claim = json.loads(z.read("team-claim.json"))
+        assert body["phase"] == phase and body["models"] == []
+        assert claim["schema_version"] == "2.0" and claim["site_team_id"] == 23
+        assert all(TEST_KEY.encode() not in z.read(n) for n in z.namelist())
+    module.validate_package(candidate, first, TEST_KEY)
 
 
-@pytest.mark.parametrize(
-    "key", ["competition_url", "team_id_mapping_source", "confirmed_c5_team_id"]
-)
-def test_each_registration_field_required(ready, tmp_path, key):
-    ready[key] = None
+def test_real_key_required(candidate, delivery, tmp_path):
     with pytest.raises(ValueError, match="Submission blocked"):
-        module.package(ready, evidence(ready), tmp_path / "submission.zip")
+        module.package(candidate, delivery, tmp_path / "no.zip")
+    assert not (tmp_path / "no.zip").exists()
 
 
 @pytest.mark.parametrize(
     "delta",
     [
-        {"image": "ghcr.io/example/wrong@sha256:" + "0" * 64},
-        {"status": "failed"},
-        {"profile": "official"},
+        {"image": "wrong"},
         {"rankable": True},
+        {"scope": "historical"},
+        {"status": "failed"},
+        {"runs": {}},
+        {"anonymous_pull": False},
     ],
 )
-def test_wrong_verification_refuses_zip(ready, tmp_path, delta):
-    report = {**evidence(ready), **delta}
-    with pytest.raises(ValueError, match="verification must"):
-        module.package(ready, report, tmp_path / "submission.zip")
+def test_old_or_wrong_delivery_refused(candidate, delivery, key_file, tmp_path, delta):
+    with pytest.raises(ValueError, match="delivery verification"):
+        module.package(candidate, {**delivery, **delta}, tmp_path / "no.zip", key_file)
 
 
-def test_existing_archive_not_overwritten(ready, tmp_path):
-    archive = tmp_path / "submission.zip"
-    archive.write_bytes(b"previous reviewed package")
+def test_claim_cannot_move_to_other_descriptor(candidate, delivery, key_file, tmp_path):
+    archive = tmp_path / "one.zip"
+    module.package(candidate, delivery, archive, key_file)
+    with zipfile.ZipFile(archive) as z:
+        raw = z.read("submission.json")
+        claim = z.read("team-claim.json")
+    altered = tmp_path / "altered.zip"
+    with zipfile.ZipFile(altered, "w") as z:
+        z.writestr("submission.json", raw + b" ")
+        z.writestr("team-claim.json", claim)
+    with pytest.raises(ValueError, match="claim does not bind"):
+        module.validate_package(candidate, altered, TEST_KEY)
+    with pytest.raises(ValueError, match="does not match"):
+        module.validate_package(candidate, archive, "another-fixture-key")
+
+
+def test_existing_archive_preserved(candidate, delivery, key_file, tmp_path):
+    path = tmp_path / "old.zip"
+    path.write_bytes(b"reviewed")
     with pytest.raises(FileExistsError):
-        module.package(ready, evidence(ready), archive)
-    assert archive.read_bytes() == b"previous reviewed package"
+        module.package(candidate, delivery, path, key_file)
+    assert path.read_bytes() == b"reviewed"
 
 
-def test_secret_field_rejected(candidate):
-    candidate["team_key"] = "not-a-real-key"
-    with pytest.raises(ValueError, match="never add a Team Key"):
-        module.descriptor(candidate)
+def test_pull_rechecked_when_packaging(
+    candidate, delivery, key_file, tmp_path, monkeypatch
+):
+    def unavailable(*args):
+        raise ValueError("registry unavailable now")
+
+    monkeypatch.setattr(module, "anonymous_pull", unavailable)
+    with pytest.raises(ValueError, match="unavailable now"):
+        module.package(candidate, delivery, tmp_path / "no.zip", key_file)
+    assert not (tmp_path / "no.zip").exists()
 
 
-def test_cli_reports_pending_registration(candidate, tmp_path):
-    config = tmp_path / "candidate.json"
-    config.write_text(json.dumps(candidate))
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(ROOT / "scripts/prepare_submission.py"),
-            "status",
-            "--candidate",
-            str(config),
-        ],
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 1
-    report = json.loads(result.stdout)
-    assert report["registration_ready"] is False
-    assert any("confirmed_c5_team_id" in reason for reason in report["blockers"])
+def test_secret_and_legacy_fields_refused(candidate):
+    for key in ("team_key", "confirmed_c5_team_id"):
+        with pytest.raises(ValueError, match="never add a Team Key"):
+            module.descriptor({**candidate, key: "not-a-secret"})
 
 
-@pytest.mark.parametrize(
-    "field,value",
-    [
-        ("regression", {"total_scenarios": 0, "passed": 0, "failed": 0, "errored": 0}),
-        ("batch_units", []),
-        ("repeats", {}),
-        ("anonymous_registry_access", False),
-    ],
-)
-def test_incomplete_evidence_refuses_package(ready, tmp_path, field, value):
-    report = evidence(ready)
-    report[field] = value
-    with pytest.raises(ValueError, match="verification must"):
-        module.package(ready, report, tmp_path / "submission.zip")
+def test_wrong_event_count_refused(candidate, delivery):
+    delivery["runs"]["simulate"]["reported_n_events"] = 100000000
+    with pytest.raises(ValueError, match="cross-check counts"):
+        module.validate_delivery(delivery, module.candidate_image(candidate))
 
 
-def test_changed_repeat_bytes_are_observable(tmp_path):
-    output = tmp_path / "sub_00"
-    output.mkdir()
-    trace = output / "trace.parquet"
-    trace.write_bytes(b"original trace bytes")
-    before = module.output_hashes(tmp_path)
-    trace.write_bytes(b"changed trace bytes")
-    assert (
-        module.output_hashes(tmp_path)["sub_00/trace.parquet"]
-        != before["sub_00/trace.parquet"]
-    )
+def test_repeat_artifacts_follow_card_ledger_policy(tmp_path):
+    import sys
 
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    import prepare_submission as preparation
 
-def test_missing_repeat_ledger_refuses_package(ready, tmp_path):
-    report = evidence(ready)
-    unit = module.repeat_units()[0]
-    del report["repeats"][unit.name]["parquet_sha256"]["message_trace.parquet"]
-    with pytest.raises(ValueError, match="byte-repeat checks"):
-        module.package(ready, report, tmp_path / "submission.zip")
+    unit = tmp_path / "unit"
+    unit.mkdir()
+    card = unit / "card.toml"
+    for declared, required in (("false", False), ("true", True)):
+        card.write_text(
+            '[task]\nscenario_family = "throughput-scale"\n[scoring.params]\nrequires_message_ledger = '
+            + declared
+            + "\n"
+        )
+        assert preparation.repeat_artifacts(unit) == (
+            {"trace.parquet", "message_trace.parquet"}
+            if required
+            else {"trace.parquet"}
+        )

@@ -1,0 +1,8 @@
+# Offline reference adapter on the immutable ABIDES + four-patch numeric stack.
+ARG REFERENCE_BASE=ghcr.io/youxuanxue/track3-simulation-public@sha256:b7892677fb8c3446a3814ae24a141f2696c006130b6323807a4f34dc48e68d40
+FROM ${REFERENCE_BASE}
+COPY out/reference-wheels /tmp/reference-wheels
+COPY baselines/reference-wheels.sha256 /tmp/reference-wheels/checksums
+RUN cd /tmp/reference-wheels && sha256sum -c checksums \
+    && pip install --no-index --no-deps ./*.whl
+COPY baselines/abides_fork /opt/abides_fork

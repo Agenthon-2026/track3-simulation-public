@@ -1,0 +1,16 @@
+# Rebuild both native extensions on the already qualified delivery runtime.
+# Numeric dependencies and patched ABIDES remain identical to the fixed parent.
+ARG NATIVE_BASE=ghcr.io/youxuanxue/track3-simulation-public@sha256:70d051db3aa7da8158e7a8a20888d377ec6a1f54e5d0c4c4d929c3c72a483879
+FROM ${NATIVE_BASE}
+ARG PIP_INDEX_URL=https://pypi.org/simple
+COPY baselines/fast_sim /opt/fast_sim
+COPY baselines/abides_fork /opt/abides_fork
+COPY baselines/setup_fast_sim.py /opt/setup_fast_sim.py
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends gcc g++ \
+    && pip install --no-cache-dir cython==3.0.11 \
+    && cd /opt && python setup_fast_sim.py build_ext --inplace --force \
+    && pip uninstall -y cython \
+    && apt-get purge -y gcc g++ \
+    && apt-get autoremove -y \
+    && rm -rf /opt/build /opt/fast_sim/*.c /var/lib/apt/lists/*

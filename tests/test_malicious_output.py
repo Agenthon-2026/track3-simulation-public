@@ -26,6 +26,7 @@ the strength of a local green run.
 from __future__ import annotations
 
 import shutil
+import hashlib
 import sys
 import tempfile
 from pathlib import Path
@@ -274,6 +275,58 @@ def test_a_clean_run_is_retained(tmp_path: Path) -> None:
     assert sorted(p.name for p in kept.iterdir()) == sorted(SINGLE_UNIT_FILES)
     # Hashes are of the COPIES, and no link of any kind survived.
     assert not any(p.is_symlink() for p in kept.rglob("*"))
+
+
+def test_local_retention_accepts_outputs_over_shared_byte_defaults(tmp_path: Path) -> None:
+    """Exercise copy AND re-verification above 64 MiB/file and 256 MiB/tree.
+
+    These are reception fixtures, not semantically valid simulation results.
+    The shared sanitizer's own default policy must remain unchanged.
+    """
+    from throughput.run_unit import retain_output
+
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    unit = tmp_path / "unit"
+    unit.mkdir()
+    chunk = b"x" * (1024 * 1024)
+    for name in SINGLE_UNIT_FILES:
+        with (raw / name).open("wb") as stream:
+            for _ in range(65):
+                stream.write(chunk)
+    with pytest.raises(TreeRefused):
+        _sanitize(raw, tmp_path / "shared" / "clean", SINGLE_UNIT_FILES)
+    kept = tmp_path / "kept"
+    retain_output(raw, kept, unit)
+    assert sum(p.stat().st_size for p in kept.iterdir()) == 260 * 1024**2
+    for name in SINGLE_UNIT_FILES:
+        with (raw / name).open("rb") as source, (kept / name).open("rb") as copy:
+            assert hashlib.file_digest(source, "sha256").digest() == hashlib.file_digest(
+                copy, "sha256"
+            ).digest()
+
+
+def test_local_retention_still_bounds_bytes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Scale the local disk to avoid allocating 10 GiB just to check its boundary."""
+    from throughput import run_unit
+
+    monkeypatch.setattr(run_unit, "LOCAL_DISK_BYTES", 1024)
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    unit = tmp_path / "unit"
+    unit.mkdir()
+    trace = raw / "trace.parquet"
+    trace.write_bytes(b"x" * 1024)
+    run_unit.retain_output(raw, tmp_path / "at-limit", unit)
+    trace.write_bytes(b"x" * 1025)
+    with pytest.raises(TreeRefused, match="file_bytes_exceeded"):
+        run_unit.retain_output(raw, tmp_path / "over-file", unit)
+    trace.write_bytes(b"x" * 513)
+    (raw / "message_trace.parquet").write_bytes(b"x" * 513)
+    with pytest.raises(TreeRefused):
+        run_unit.retain_output(raw, tmp_path / "over-total", unit)
+    assert not (tmp_path / "over-file").exists()
+    assert not (tmp_path / "over-total").exists()
 
 
 def _cleanup(root: Path) -> None:  # pragma: no cover - helper for the script runner

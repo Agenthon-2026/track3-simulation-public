@@ -23,9 +23,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import _contract_fixtures as F  # noqa: E402
+import pandas as pd  # noqa: E402
+import pytest  # noqa: E402
 from qfbench2_common.contracts import OrganizerFault, ParticipantFailure  # noqa: E402
+from qfbench2_common.sanitize import materialize_tree  # noqa: E402
 
 from qfbench2_track_simulation import telemetry as T  # noqa: E402
+from qfbench2_track_simulation.limits import allowed_paths_for  # noqa: E402
+
+REPO = Path(__file__).resolve().parent.parent
 
 N = 72_061
 
@@ -165,6 +171,89 @@ def test_alternating_fast_invalid_repeats_fail_in_either_order() -> None:
     ):
         record = F.run_record(repeat_digests=digests)
         _expect(ParticipantFailure, T.ranked_timing, record, F.plan(), reference_event_count=N)
+
+
+def _honest_repeat_tree(root: Path, *, wall_clock_sec: float) -> str:
+    """Write a well-formed output tree and return the REAL digest the Runner would record.
+
+    Identical in every respect across calls except `wall_clock_sec`, which is what an honest
+    submission reports and cannot hold constant.
+    """
+    out = root / "out"
+    out.mkdir(parents=True)
+    frame = pd.DataFrame(
+        {
+            "t_ns": [1, 2, 3],
+            "msg_type": ["ORDER_SUBMITTED", "ORDER_FILLED", "QUOTE_UPDATE"],
+            "order_id": [0, 1, 2],
+            "agent_id": [1, 1, 2],
+            "side": ["BUY", "SELL", "BUY"],
+            "price": [10, 11, 12],
+            "size": [1, 1, 1],
+        }
+    )
+    frame.to_parquet(out / "trace.parquet")
+    frame.to_parquet(out / "message_trace.parquet")
+    (out / "events.json").write_text(
+        json.dumps(
+            {
+                "scenario_id": "synthetic",
+                "n_events": 3,
+                "seed": 7,
+                "trace_sha256": "0" * 64,
+                "wall_clock_sec": wall_clock_sec,
+                "events_per_sec": 3.0 / wall_clock_sec,
+            }
+        ),
+        encoding="utf-8",
+    )
+    unit = REPO / "units" / "t3-s001-price-time-priority"
+    result = materialize_tree(
+        out, root / "staging", allowed_paths=allowed_paths_for(unit)
+    )
+    assert not result.rejections, result.rejections
+    return result.tree_digest()
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "track3-simulation-public#5 / Agenthon2026#116. The repeat check compares a byte digest "
+        "of the WHOLE output tree, events.json is inside that tree, and events.json must carry a "
+        "real wall_clock_sec. So an honest submission diverges on every repeat and is refused. "
+        "Track 3 cannot repair this alone: C2 carries one opaque digest per repeat and the repeat "
+        "key set is closed, so there is nothing to recompute a narrower digest from. When the "
+        "producer digests only limits.STABLE_OUTPUT_FILES this test XPASSes and the marker goes."
+    ),
+)
+def test_an_honest_submission_is_not_refused_for_reporting_its_real_wall_clock() -> None:
+    """THE acceptance test, and the one the suite never had.
+
+    Every other digest in this module is the placeholder `F.TREE_DIGEST`, handed to each repeat by
+    the fixture, so the positive controls pass by construction regardless of what is on disk. The
+    suite therefore asserted this defect was absent by assuming it. Here both digests are real,
+    produced by `materialize_tree` over two trees that differ only in the timing field an honest
+    submission has no choice but to vary.
+    """
+    with tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second:
+        scored = _honest_repeat_tree(Path(first), wall_clock_sec=1.000000)
+        repeat = _honest_repeat_tree(Path(second), wall_clock_sec=1.000001)
+
+    # One microsecond of honest measurement, and the trees no longer hash alike.
+    assert scored != repeat, (
+        "precondition failed: the two trees hashed identically, so this test cannot "
+        "demonstrate anything"
+    )
+
+    record = F.run_record(
+        n_events=3,
+        tree_digest=scored,
+        repeat_digests=[scored, repeat, repeat, repeat, repeat],
+        repeat_events=[3] * 5,
+        row_counts={"trace.parquet": 3},
+    )
+    timing = T.ranked_timing(record, F.plan(), reference_event_count=3)
+    assert timing.rankable is True
 
 
 def test_a_repeat_with_a_different_event_count_fails() -> None:

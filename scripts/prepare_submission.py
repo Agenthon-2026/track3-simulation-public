@@ -1,7 +1,7 @@
 """Recheck the participant image and package a Development submission.
 
-Local verification is non-rankable. Official identity mapping must be supplied
-before a package can be produced; website IDs are never inferred.
+Local verification is non-rankable. The official toolkit derives the team alias
+and builds the claim; platform availability does not block local packaging.
 """
 
 from __future__ import annotations
@@ -11,13 +11,13 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import platform
+import re
+import tempfile
 import subprocess
 import sys
 from datetime import datetime, timezone
-from importlib.metadata import distribution
 from importlib.resources import files
-from urllib.parse import urlparse
+from importlib.metadata import distribution
 from urllib.request import Request, urlopen
 import zipfile
 
@@ -26,7 +26,6 @@ sys.path.insert(0, str(ROOT))
 
 from qfbench2_common.contracts.descriptor import (  # noqa: E402
     SubmissionDescriptor,
-    seal_descriptor_digest,
 )
 
 
@@ -34,58 +33,63 @@ def load_json(path: Path) -> dict:
     return json.loads(path.read_text())
 
 
-def descriptor(candidate: dict) -> dict:
-    allowed = {
-        "image",
-        "license",
-        "confirmed_c5_team_id",
-        "team_id_mapping_source",
-        "competition_url",
-    }
+def candidate_image(candidate: dict) -> str:
+    allowed = {"image", "license", "team_number", "phase"}
     if set(candidate) != allowed:
         raise ValueError(
             "candidate fields must match submission/candidate.json; never add a Team Key"
         )
+    from qfbench2_common.team_claim import validate_team_number
+
+    validate_team_number(candidate["team_number"])
+    if candidate["phase"] not in {"dev", "final"}:
+        raise ValueError("phase must be dev or final")
+    image = candidate["image"]
+    if set(image) != {"registry", "repository", "digest"} or not re.fullmatch(
+        r"sha256:[0-9a-f]{64}", image["digest"]
+    ):
+        raise ValueError("candidate requires a fixed image digest")
+    return f"{image['registry']}/{image['repository']}@{image['digest']}"
+
+
+def descriptor(candidate: dict, team_key: str | None = None) -> dict:
+    """Return a template without a fictional identity, or a sealed real-team C5."""
+    candidate_image(candidate)
     fixture = files("qfbench2_common").joinpath(
-        "contracts/fixtures/c5/simulation_dev.json"
+        f"contracts/fixtures/c5/simulation_{candidate['phase']}.json"
     )
     body = json.loads(fixture.read_text())
     body.update(
-        models=[
-            {
-                "name": "none-deterministic-simulator",
-                "version": candidate["image"]["digest"],
-                "training_cutoff": "not-applicable",
-                "access": "local",
-                "revision": candidate["image"]["digest"],
-            }
-        ],
+        models=[],
         image=candidate["image"],
+        image_access="public",
         license=candidate["license"],
-        team_id=candidate["confirmed_c5_team_id"] or "unconfirmed-do-not-submit",
     )
     body.pop("descriptor_digest", None)
-    sealed = seal_descriptor_digest(body)
-    SubmissionDescriptor.from_mapping(sealed)
-    return sealed
+    body.pop("team_id", None)
+    if team_key is not None:
+        from qfbench2_common.team_claim import seal_for_team
+
+        return seal_for_team(body, candidate["team_number"], team_key)
+    return body
 
 
-def blockers(candidate: dict) -> list[str]:
-    missing = []
-    team_id = candidate["confirmed_c5_team_id"]
-    if not isinstance(team_id, str) or not team_id.strip():
-        missing.append("confirmed_c5_team_id: official mapping not yet obtained")
-    for key in ("competition_url", "team_id_mapping_source"):
-        value = candidate[key]
-        parsed = urlparse(value) if isinstance(value, str) else None
-        if (
-            not parsed
-            or parsed.scheme != "https"
-            or not parsed.netloc
-            or parsed.username
-        ):
-            missing.append(f"{key}: official HTTPS source required")
-    return missing
+def blockers(candidate: dict, key_file: Path | None = None) -> list[str]:
+    candidate_image(candidate)
+    if key_file is None:
+        return [
+            "team_key_file: real-team key required for G1; supply a private file outside the repository"
+        ]
+    read_key(key_file)
+    return []
+
+
+def read_key(path: Path) -> str:
+    from qfbench2_common.team_claim import read_team_key_file
+
+    if path.resolve().is_relative_to(ROOT):
+        raise ValueError("Team Key must be outside the repository")
+    return read_team_key_file(path)
 
 
 def public_image(image: dict) -> None:
@@ -114,10 +118,6 @@ def public_image(image: dict) -> None:
             raise ValueError("registry returned different image bytes")
 
 
-def run(command: list[str], env: dict | None = None) -> None:
-    subprocess.run(command, cwd=ROOT, env=env, check=True)
-
-
 def output_hashes(output: Path) -> dict[str, str]:
     hashes = {}
     for path in sorted(output.rglob("*.parquet")):
@@ -138,225 +138,240 @@ def repeat_units() -> list[Path]:
 
 def repeat_artifacts(unit: Path) -> set[str]:
     from qfbench2_track_simulation.batch import load_subs
+    from qfbench2_track_simulation.scoring import _CardPolicy
 
-    prefixes = (
-        [entry["sub"] + "/" for entry in load_subs(unit)]
-        if (unit / "batch.json").exists()
-        else [""]
-    )
-    return {
-        prefix + name
-        for prefix in prefixes
-        for name in ("trace.parquet", "message_trace.parquet")
-    }
+    batch = (unit / "batch.json").exists()
+    prefixes = [entry["sub"] + "/" for entry in load_subs(unit)] if batch else [""]
+    names = ["trace.parquet"]
+    if batch or _CardPolicy(unit).requires_message_ledger:
+        names.append("message_trace.parquet")
+    return {prefix + name for prefix in prefixes for name in names}
 
 
-def validate_verification(evidence: dict, image: str) -> None:
-    from regression_suite.build_reference_cache import scenario_index
-
-    if evidence.get("image") != image or evidence.get("status") != "passed":
-        raise ValueError("verification must pass for the exact candidate image digest")
-    if evidence.get("profile") != "developer" or evidence.get("rankable") is not False:
-        raise ValueError("verification must declare the local developer profile")
-    total = len(scenario_index())
-    if evidence.get("regression") != {
-        "total_scenarios": total,
-        "passed": total,
-        "failed": 0,
-        "errored": 0,
-    }:
-        raise ValueError(
-            "verification must cover the complete public regression roster"
-        )
-    if evidence.get("batch_units") != [unit.name for unit in batch_units()]:
-        raise ValueError("verification must cover every public batch unit")
-    if evidence.get("anonymous_registry_access") is not True:
-        raise ValueError("verification must confirm anonymous registry access")
-    for unit in repeat_units():
-        repeat = evidence.get("repeats", {}).get(unit.name, {})
-        hashes = repeat.get("parquet_sha256", {})
-        if repeat.get("runs") != 3 or set(hashes) != repeat_artifacts(unit):
-            raise ValueError(
-                "verification must include single and batch byte-repeat checks"
-            )
-        if any(
-            not isinstance(value, str)
-            or len(value) != 64
-            or any(c not in "0123456789abcdef" for c in value)
-            for value in hashes.values()
-        ):
-            raise ValueError("verification must contain SHA-256 parquet hashes")
-
-
-def verify(candidate: dict, output: Path) -> dict:
-    from qfbench2_common.smoke import run_smoke
-    from qfbench2_track_simulation.scoring import build_developer_verifier
-    from throughput.timer import bounded_container_run
-
-    image = SubmissionDescriptor.from_mapping(descriptor(candidate)).image_reference()
-    output = output.resolve()
-    output.mkdir(parents=True, exist_ok=False)
+def anonymous_pull(
+    candidate: dict, output: Path, execution_platform: str = "linux/amd64"
+) -> dict:
+    """Pull using an empty Docker auth config, preserving only the daemon endpoint."""
+    if execution_platform not in {"linux/amd64", "linux/arm64"}:
+        raise ValueError("unsupported execution platform")
+    image = candidate_image(candidate)
     public_image(candidate["image"])
-    run(["docker", "pull", "--platform=linux/amd64", image])
+    endpoint = os.environ.get("DOCKER_HOST")
+    if not endpoint:
+        context = json.loads(subprocess.check_output(["docker", "context", "inspect"]))[
+            0
+        ]
+        endpoint = context["Endpoints"]["docker"]["Host"]
+    with tempfile.TemporaryDirectory(prefix="t3-anonymous-") as config:
+        command = [
+            "docker",
+            "--config",
+            config,
+            "--host",
+            endpoint,
+            "pull",
+            "--platform=" + execution_platform,
+            image,
+        ]
+        with (output / "anonymous-pull.log").open("xb") as log:
+            subprocess.run(
+                command, check=True, stdout=log, stderr=subprocess.STDOUT, timeout=600
+            )
     inspected = json.loads(
         subprocess.check_output(["docker", "image", "inspect", image])
     )[0]
-    if inspected["Architecture"] != "amd64" or inspected["Os"] != "linux":
-        raise ValueError("candidate must resolve to linux/amd64")
-    labels = inspected["Config"].get("Labels") or {}
-    required_labels = {
+    if (
+        inspected["Architecture"] != execution_platform.split("/")[1]
+        or inspected["Os"] != "linux"
+    ):
+        raise ValueError("candidate must resolve to " + execution_platform)
+    required = {
         "qfbench2.interface_version": "2.0",
         "qfbench2.track": "simulation",
         "qfbench2.category": "simulator",
     }
-    if any(labels.get(key) != value for key, value in required_labels.items()):
-        raise ValueError(
-            "image must declare the simulation/simulator interface 2.0 labels"
-        )
-    run([sys.executable, ".github/validate_units.py", "simulation"])
-    reference = output / "references"
-    run(
-        [
-            sys.executable,
-            "regression_suite/build_reference_cache.py",
-            "--out",
-            str(reference),
-        ]
-    )
-    scratch = output / "tmp"
-    scratch.mkdir()
-    env = {**os.environ, "PYTHONPATH": str(ROOT), "TMPDIR": str(scratch)}
-    run(
-        [
-            sys.executable,
-            "regression_suite/run_regression.py",
-            "--candidate-image",
-            image,
-            "--scenarios-dir",
-            "regression_suite/scenarios",
-            "--reference-dir",
-            str(reference),
-            "--output-dir",
-            str(output / "regression"),
-            "--workers",
-            "1",
-        ],
-        env,
-    )
-    report = load_json(output / "regression/report.json")
-    if (
-        report["passed"] != report["total_scenarios"]
-        or report["failed"]
-        or report["errored"]
-    ):
-        raise ValueError("public regression failed")
-
-    def simulate(unit: Path, destination: Path) -> dict[str, str]:
-        destination.mkdir(parents=True)
-        batch = (unit / "batch.json").exists()
-        source = unit / "scenarios" if batch else unit / "scenario.json"
-        target = "/input/scenarios" if batch else "/input/scenario.json"
-        cidfile = destination.parent / (destination.name + ".cid")
-        command = [
-            "docker",
-            "run",
-            "--rm",
-            "--platform=linux/amd64",
-            "--network=none",
-            "--cpus=4",
-            "--memory=16g",
-            "--cidfile",
-            str(cidfile),
-            "--user",
-            f"{os.getuid()}:{os.getgid()}",
-            "-v",
-            f"{source}:{target}:ro",
-            "-v",
-            f"{destination}:/output",
-            image,
-        ]
-        command += (
-            ["simulate-batch", "--batch-dir", target, "--out-dir", "/output"]
-            if batch
-            else ["simulate", "--config", target, "--out", "/output/trace.parquet"]
-        )
-        result = bounded_container_run(command, cidfile=cidfile, timeout_sec=1800)
-        destination.with_suffix(".stdout.log").write_bytes(result.stdout)
-        destination.with_suffix(".stderr.log").write_bytes(result.stderr)
-        result.check_returncode()
-        verdict = run_smoke(unit, destination, build_developer_verifier)
-        if not verdict.admissible:
-            raise ValueError(f"developer verification failed: {unit.name}")
-        return output_hashes(destination)
-
-    for unit in batch_units():
-        simulate(unit, output / "batch" / unit.name)
-    repeated = {}
-    for unit in repeat_units():
-        hashes = [
-            simulate(unit, output / "repeats" / unit.name / str(i)) for i in range(3)
-        ]
-        if not hashes[0] or any(item != hashes[0] for item in hashes):
-            raise ValueError(f"repeated parquet bytes differ: {unit.name}")
-        repeated[unit.name] = {"runs": len(hashes), "parquet_sha256": hashes[0]}
-    evidence = {
+    if any(inspected["Config"]["Labels"].get(k) != v for k, v in required.items()):
+        raise ValueError("incorrect interface labels")
+    return {
         "image": image,
-        "checked_at": datetime.now(timezone.utc).isoformat(),
-        "profile": "developer",
-        "rankable": False,
-        "status": "passed",
-        "host": platform.platform(),
-        "toolkit_version": distribution("qfbench2-common").version,
-        "toolkit_source": json.loads(
-            distribution("qfbench2-common").read_text("direct_url.json") or "null"
-        ),
-        "scorer_commit": subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
-        ).strip(),
-        "regression": {
-            key: report[key]
-            for key in ("total_scenarios", "passed", "failed", "errored")
-        },
-        "batch_units": [unit.name for unit in batch_units()],
-        "repeats": repeated,
-        "exemplar": "not verified: no public reference traces; full-size run remains pending",
-        "anonymous_registry_access": True,
+        "platform": execution_platform,
+        "labels": required,
+        "anonymous_pull": True,
     }
-    validate_verification(evidence, image)
-    (output / "verification.json").write_text(json.dumps(evidence, indent=2) + "\n")
+
+
+def delivery_identity() -> dict:
+    package = distribution("qfbench2-common")
+    return {
+        "toolkit_version": package.version,
+        "toolkit_source": json.loads(package.read_text("direct_url.json") or "null"),
+        "gate_sha256": hashlib.sha256(
+            Path(__file__).read_bytes() + (ROOT / "throughput/run_unit.py").read_bytes()
+        ).hexdigest(),
+    }
+
+
+def verify_delivery(
+    candidate: dict, output: Path, execution_platform: str = "linux/amd64"
+) -> dict:
+    """Execute both verbs offline; this limited check is never a G2 report."""
+    from dataclasses import asdict
+    from throughput.run_unit import run_once, is_batch_unit
+
+    output = output.resolve()
+    output.mkdir(parents=True, exist_ok=False)
+    evidence = anonymous_pull(candidate, output, execution_platform)
+    evidence.update(
+        profile="developer",
+        rankable=False,
+        scope="delivery",
+        identity=delivery_identity(),
+        checked_at=datetime.now(timezone.utc).isoformat(),
+        runs={},
+    )
+    for unit in repeat_units():
+        record = run_once(
+            candidate_image(candidate),
+            unit,
+            batch=is_batch_unit(unit),
+            keep_output=output / unit.name,
+            run_as_host_user=True,
+            timeout_sec=1800,
+            scratch_root=output,
+        )
+        evidence["runs"]["simulate-batch" if is_batch_unit(unit) else "simulate"] = (
+            asdict(record)
+        )
+    evidence["status"] = "passed"
+    (output / "delivery.json").write_text(json.dumps(evidence, indent=2) + "\n")
     return evidence
 
 
-def package(candidate: dict, evidence: dict, output: Path) -> None:
-    body = descriptor(candidate)
-    pending = blockers(candidate)
+def validate_delivery(
+    evidence: dict, image: str, execution_platform: str = "linux/amd64"
+) -> None:
+    if execution_platform not in {"linux/amd64", "linux/arm64"}:
+        raise ValueError("unsupported execution platform")
+    if (
+        evidence.get("image") != image
+        or evidence.get("status") != "passed"
+        or evidence.get("identity") != delivery_identity()
+        or evidence.get("scope") != "delivery"
+        or evidence.get("profile") != "developer"
+        or evidence.get("rankable") is not False
+        or evidence.get("anonymous_pull") is not True
+        or evidence.get("platform") != execution_platform
+    ):
+        raise ValueError("delivery verification must pass for the exact candidate")
+    runs = evidence.get("runs", {})
+    if set(runs) != {"simulate", "simulate-batch"} or any(
+        r.get("returncode") != 0
+        or r.get("n_events", 0) <= 0
+        or r.get("n_events") != r.get("reported_n_events")
+        for r in runs.values()
+    ):
+        raise ValueError(
+            "delivery verification must execute both verbs and cross-check counts"
+        )
+
+
+def validate_package(candidate: dict, archive: Path, key: str) -> dict:
+    from qfbench2_common.team_claim import (
+        build_team_claim,
+        descriptor_digest,
+        derive_team_alias,
+    )
+
+    with zipfile.ZipFile(archive) as z:
+        if sorted(z.namelist()) != ["submission.json", "team-claim.json"]:
+            raise ValueError("package must contain exactly the descriptor and claim")
+        raw = z.read("submission.json")
+        body = json.loads(raw)
+        parsed = SubmissionDescriptor.from_mapping(body)
+        if body != descriptor(
+            candidate, key
+        ) or parsed.image_reference() != candidate_image(candidate):
+            raise ValueError("package descriptor does not match candidate")
+        if parsed.team_id != derive_team_alias(candidate["team_number"], key):
+            raise ValueError("package identity does not match team")
+        expected = build_team_claim(
+            candidate["team_number"], key, descriptor_digest(raw)
+        )
+        if z.read("team-claim.json") != expected:
+            raise ValueError("team claim does not bind the exact descriptor")
+        if any(key.encode() in z.read(n) for n in z.namelist()):
+            raise ValueError("key material must not enter the package")
+    return {
+        "descriptor_digest": body["descriptor_digest"],
+        "team_id": parsed.team_id,
+        "claim_schema": "2.0",
+    }
+
+
+def package(
+    candidate: dict,
+    evidence: dict,
+    output: Path,
+    key_file: Path | None = None,
+    execution_platform: str = "linux/amd64",
+) -> dict:
+    from qfbench2_common.team_claim import pack_submission
+
+    pending = blockers(candidate, key_file)
     if pending:
         raise ValueError("Submission blocked: " + "; ".join(pending))
-    image = SubmissionDescriptor.from_mapping(body).image_reference()
-    validate_verification(evidence, image)
+    validate_delivery(evidence, candidate_image(candidate), execution_platform)
+    key = read_key(key_file)
+    body = descriptor(candidate, key)
+    output = output.resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
-    # Exclusive creation prevents replacing a previously reviewed submission.
-    with output.open("xb") as handle, zipfile.ZipFile(
-        handle, "w", zipfile.ZIP_DEFLATED
-    ) as archive:
-        entry = zipfile.ZipInfo("submission.json", date_time=(1980, 1, 1, 0, 0, 0))
-        archive.writestr(entry, json.dumps(body, indent=2) + "\n")
+    # The toolkit replaces existing files. Stage privately, then exclusively copy so
+    # a previously reviewed archive cannot be overwritten, including via a symlink.
+    with tempfile.TemporaryDirectory(prefix="t3-pack-", dir=output.parent) as temporary:
+        staging = Path(temporary)
+        pull = anonymous_pull(candidate, staging, execution_platform)
+        archive = staging / "submission.zip"
+        pack_submission(body, candidate["team_number"], key, archive)
+        binding = validate_package(candidate, archive, key)
+        with output.open("xb") as handle:
+            handle.write(archive.read_bytes())
+    return {
+        **pull,
+        **binding,
+        "profile": "developer",
+        "qualification_scope": "local-arm64"
+        if execution_platform == "linux/arm64"
+        else "amd64",
+        "rankable": False,
+        "scope": "G1",
+        "status": "passed",
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "archive_sha256": hashlib.sha256(output.read_bytes()).hexdigest(),
+        "archive": str(output),
+        "delivery": evidence,
+    }
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("status", "verify", "package"))
+    parser.add_argument("action", choices=("status", "verify-delivery", "package"))
     parser.add_argument(
         "--candidate", type=Path, default=ROOT / "submission/candidate.json"
     )
     parser.add_argument("--out", type=Path)
     parser.add_argument("--verification", type=Path)
+    parser.add_argument("--team-key-file", type=Path)
+    parser.add_argument(
+        "--execution-platform",
+        choices=("linux/amd64", "linux/arm64"),
+        default="linux/amd64",
+    )
     args = parser.parse_args()
     try:
         candidate = load_json(args.candidate)
         descriptor(candidate)
         if args.action == "status":
-            pending = blockers(candidate)
+            pending = blockers(candidate, args.team_key_file)
             print(
                 json.dumps(
                     {"registration_ready": not pending, "blockers": pending}, indent=2
@@ -365,13 +380,27 @@ def main() -> int:
             return int(bool(pending))
         if args.out is None:
             parser.error("--out is required; verification directories must be new")
-        if args.action == "verify":
-            print(json.dumps(verify(candidate, args.out), indent=2))
+        if args.action == "verify-delivery":
+            print(
+                json.dumps(
+                    verify_delivery(candidate, args.out, args.execution_platform),
+                    indent=2,
+                )
+            )
         else:
             if args.verification is None:
                 parser.error("--verification is required for packaging")
-            package(candidate, load_json(args.verification), args.out)
-            print(f"Created {args.out}")
+            result = package(
+                candidate,
+                load_json(args.verification),
+                args.out,
+                args.team_key_file,
+                args.execution_platform,
+            )
+            args.out.with_suffix(".g1.json").write_text(
+                json.dumps(result, indent=2) + "\n"
+            )
+            print(json.dumps(result, indent=2))
         return 0
     except (ValueError, OSError, subprocess.SubprocessError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)

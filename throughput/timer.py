@@ -162,8 +162,8 @@ class ThroughputResult:
     median_host_peak_memory_bytes: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        """Return a JSON-serialisable dictionary."""
-        return asdict(self)
+        """Return a JSON-serialisable, explicitly non-rankable developer record."""
+        return {**asdict(self), "profile": "developer", "rankable": False}
 
     def __str__(self) -> str:
         scored_runs = (

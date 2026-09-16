@@ -52,7 +52,8 @@ is far too slow for large-scale experiments. Track 3 asks participants to build 
 **ABIDES** (Agent-Based Interactive Discrete Event Simulator) is an open-source market
 simulator originally built by J.P. Morgan. Source:
 `https://github.com/jpmorganchase/abides-jpmc-public`. It is the **reference baseline**
-for Track 3 — your simulator must be faster than ABIDES while producing the same results.
+for Track 3 — use it to compare performance while preserving the required results. An
+admissible simulator does not have to beat ABIDES to receive a rank.
 
 ABIDES models a market as a set of **agents** (software programs that send buy/sell orders)
 and an **exchange** (a program that collects orders, matches them, and sends back fills).
@@ -231,6 +232,17 @@ Common causes of accidental non-determinism to avoid: using Python's `time.time(
 anything that affects order timing; using `dict` ordering (which changed across Python
 versions); using threads that run in unpredictable order.
 
+**A shared seed does not guarantee the reference trace.** The same RNG implementation and
+state produce the same sequence; different generators or different seed/draw assignments can
+produce different market events from the same seed. The baseline seeds separate random states
+for its oracle, exchange, scenario agents, latency model and kernel in a fixed construction order.
+Most published single-scenario units use stochastic message latency, so changes to that assignment
+can also change delivery order. The Tier-A note in `README.md` explains this coupling.
+
+Tier A checks the emitted trace, with the published tolerances. It does not inspect or mandate a
+particular RNG implementation: any optimization remains eligible if its output passes those
+checks. Tier B uses the statistical comparison in `docs/CATEGORIES.md` instead.
+
 ---
 
 ## 8. The semantic regression check
@@ -297,8 +309,7 @@ clustering of big moves. The stylized-fact check catches this.
 
 Before a submission is ranked by speed, it must pass all four gated stylized-fact checks
 (KS distance, ACF of |r_t|, Hill tail exponent, and depth-distribution JS — the first three
-are also computed by the local `regression_suite` pre-check; the depth check runs at sealed
-scoring, where order-book depth histograms are reconstructed). The intraday
+are all computed by the local `regression_suite` pre-check, including the depth divergence). The intraday
 U-shape below is described for context but is not gated by a ceiling:
 
 ### Fat tails (heavy tails)
@@ -320,8 +331,10 @@ measure this with the **autocorrelation function of |r_t|** (ACF of |r_t|).
 At the same time, the raw returns `r_t` themselves should NOT be autocorrelated (i.e.,
 knowing that the price went up today should not tell you much about tomorrow's direction).
 
-The ceiling: the L2 difference between your ACF-of-|r_t| curve and the reference curve
-(over lags 1 to 20) must be ≤ 0.12.
+The ceiling: the root-mean-square difference between your ACF-of-|r_t| and the reference's,
+evaluated at lags 1, 5, 10, 20 and 50, must be ≤ 0.12. It is an RMS over those five lags, not an
+L2 norm over every lag from 1 to 20, so computing it the other way will not reproduce the number
+the scorer reports.
 
 ### Intraday seasonality (U-shape)
 
@@ -422,15 +435,15 @@ Your simulator must write this number to `events.json` after each run:
 }
 ```
 
-The harness runs your simulator **five times** on the sealed benchmark scenario with five
-different seeds. It discards the first run (which is typically slower because the Python
-JIT needs to warm up), then takes the **median** of the remaining four runs. The median is
-robust to one outlier run caused by the operating system scheduler temporarily preempting
-your process.
+The local `throughput/timer.py` defaults to five runs with different derived seeds and discards
+the first as warm-up. Its median is a developer measurement. The official evaluation plan
+separately commits its repeat count and warm-up treatment; those final settings are not implied
+by the local defaults.
 
-You cannot fake `events_per_sec` — the harness checks that it is consistent with
-`n_events` divided by `wall_clock_sec`, within ±5%. Submissions that report an inflated
-number are disqualified.
+For an official unit, the scorer uses the median of the organizer-measured repeat rates. Every
+measured repeat must reproduce the scored output and event count. Your `events.json` rate is
+checked for consistency with `n_events / wall_clock_sec` within ±5%, but is not the ranked rate:
+the official numerator and elapsed time come from the organizer's trusted measurements.
 
 ---
 
@@ -438,8 +451,9 @@ number are disqualified.
 
 Track 3 is fundamentally about a trade-off: **speed vs. realism.** A trivially fast
 simulator that just returns an empty trace in 1 millisecond would win on speed but fails
-every correctness check. A correct but unmodified ABIDES simulation is the floor — your
-submission must be faster.
+every correctness check. A correct ABIDES simulation provides a local comparison; exceeding
+its recorded throughput is not an admission requirement. An admissible slower submission
+keeps its score and rank, with the informational `t3.throughput_nonimproving` label.
 
 The competition is designed so that the two checks are independent. You must pass
 **both** before you receive a leaderboard rank:
@@ -453,7 +467,7 @@ Submission pipeline:
         - Fail: inadmissible, no rank
         - Pass: proceed to ranking
     → Throughput ranking
-        - Score = median events/sec on sealed benchmark
+        - Score = arithmetic mean of per-unit rates over the complete evaluation roster
         - Higher is better
 ```
 
@@ -461,12 +475,10 @@ This means you cannot trade realism for speed. A simulator that is 10x faster bu
 corners on price-time priority will fail gate 1. A simulator that is 10x faster but batches
 order processing into large time steps — destroying volatility clustering — will fail gate 2.
 
-Beyond the primary raw-`events_per_sec` rank, the frontier itself is materialized by
-`throughput/frontier.py` (the speed-realism Pareto frontier), reported alongside the
-`secondary_diagnostics` on the final score (median speedup / efficiency / memory-efficiency)
-and four special awards in `throughput/awards.py` (Best GPU Acceleration, Best Speed-Realism
-Frontier, Best Latency-Semantics Preservation, Best Systems Diagnosis); the last is fed by
-the `throughput/simprofile.py` SimProfile verifier, which is diagnostic only and never an
-admissibility gate.
+The local tools also produce the speed-realism frontier (`throughput/frontier.py`), secondary
+diagnostics, and four award calculations (`throughput/awards.py`). These are developer reports,
+not an additional official score. The official path omits the secondary diagnostics; see
+`throughput/README.md` §8. The `throughput/simprofile.py` verifier is diagnostic only and never
+an admissibility gate.
 
 The fastest correct and realistic simulator wins.

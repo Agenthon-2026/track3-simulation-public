@@ -239,6 +239,12 @@ def write_parquet(obj: Any, path: Any) -> None:
 
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    from fast_sim.streaming import StoredTable
+
+    if isinstance(obj, StoredTable):
+        if obj.path.resolve() != path.resolve():
+            raise ValueError("streamed output must be written at its final destination")
+        return
     schema = getattr(obj, "schema", None)
     names = getattr(schema, "names", None) or []
     if "t_send_ns" in names:
@@ -252,9 +258,44 @@ def write_parquet(obj: Any, path: Any) -> None:
     obj.to_parquet(path, compression="snappy", index=False)
 
 
-def run_native(config: dict[str, Any]) -> tuple[Any, Any, dict[str, Any]]:
+def run_native(config: dict[str, Any], output_paths=None) -> tuple[Any, Any, dict[str, Any]]:
     from fast_sim._native import run_native_sim
 
     spec = snapshot_native(config)
-    trace, msg = run_native_sim(spec)
+    # Dispatch by workload parameters, never public scenario IDs. This estimate
+    # chooses storage only; it does not change the scenario or its event count.
+    placements = sum(
+        max(0, spec["mkt_close"] - spec["mkt_open"]) // max(1, a["interval_ns"])
+        * (2 * a["depth_levels"] if a["kind"] == 2 else 1)
+        for a in spec["agents"]
+        if a["kind"]
+    )
+    if output_paths is not None and placements > 1_000_000:
+        trace, msg = stream_native(spec, output_paths)
+    else:
+        trace, msg = run_native_sim(spec)
     return trace, msg, {"col_trace": None, "col_ledger": None, "agents": config["agents"]}
+
+
+def stream_native(spec, output_paths, chunk_rows=262144):
+    """Classify final executions, then replay into bounded Parquet row groups."""
+    from copy import deepcopy
+    from fast_sim._native import (
+        CTrace, CLedger, classify_native_executions, stream_native_sim,
+    )
+    from fast_sim.streaming import ParquetSink, UnstoredLedger
+
+    partial, executions = classify_native_executions(deepcopy(spec))
+    trace = ParquetSink(output_paths[0], CTrace().to_arrow())
+    try:
+        ledger = (
+            ParquetSink(output_paths[1], CLedger().to_arrow())
+            if output_paths[1] is not None else UnstoredLedger()
+        )
+        try:
+            stream_native_sim(spec, partial, executions, trace, ledger, chunk_rows)
+        finally:
+            ledger_table = ledger.close()
+    finally:
+        trace_table = trace.close()
+    return trace_table, ledger_table

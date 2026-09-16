@@ -112,10 +112,7 @@ that it is stale.
   `calibration-stylized-facts`, `throughput-scale`, `exchange-protocol`, `reactive-agent`).
 - **`seed`** — the master random-number seed. All per-agent seeds, per-latency-model
   seeds, and oracle draws are derived deterministically from this value by the framework.
-  Valid range: 0 to 2,147,483,647. A new scenario's seed must not collide with any seed
-  already in use, public or sealed; the authoring tooling is the arbiter. (An earlier
-  revision of this guide stated a fixed split — public below 2^30, sealed above. That split
-  is not what the two suites actually hold, so do not rely on it when picking a seed.)
+  Valid range: 0 to 2,147,483,647. Record the seed with the scenario so runs are reproducible.
 - **`horizon_ns`** — the simulated time window in nanoseconds. One US equity session =
   23,400,000,000,000 ns (6.5 hours). Minimum: 1,000,000,000 ns (1 second). Longer
   horizons increase trace file size; keep uncompressed trace under 50 GB.
@@ -128,26 +125,41 @@ per-agent parameters live in **`agent_configs`**; the per-type counts in `agent_
 must match `agent_mix`. Example `agent_mix`:
 
 ```json
-"agent_mix": { "ExchangeAgent": 1, "ZeroIntelligenceAgent": 20 }
+"agent_mix": { "NoiseTrader": 3, "MarketMaker": 1 }
 ```
 
 ```json
 "agent_configs": [
   {
-    "agent_type": "abides_fork.agents.ExchangeAgent",
-    "count": 1,
-    "params": {}
+    "agent_type": "NoiseTrader",
+    "count": 3,
+    "params": {
+      "order_size_mean": 10,
+      "order_size_std": 2,
+      "arrival_rate_hz": 2.0,
+      "price_offset_ticks": 5
+    }
   },
   {
-    "agent_type": "abides_fork.agents.ZeroIntelligenceAgent",
-    "count": 20,
-    "params": { "wake_up_freq": "60s", "order_size_min": 1, "order_size_max": 100 }
+    "agent_type": "MarketMaker",
+    "count": 1,
+    "params": {
+      "spread_ticks": 2,
+      "depth_levels": 3,
+      "size_per_level": 10,
+      "rebalance_interval_ns": 1000000000
+    }
   }
 ]
 ```
 
-- **`agent_type`** — fully qualified Python class name in the ABIDES fork. Must exist in
-  the fork's registered agent registry.
+The exchange is not listed here. It is constructed by the harness, so `agent_configs` carries only
+the trading population. The example above is the real `agent_configs` of
+`units/t3-s001-price-time-priority`, so it runs as written.
+
+- **`agent_type`** — a bare key from the fork's `AGENT_REGISTRY`, not a Python import path. The
+  loader looks the string up directly, so a dotted class path will not resolve. The registry
+  contains `NoiseTrader`, `MarketMaker`, `ValueTrader` and `MomentumTrader`.
 - **`count`** — number of independent instances. Each gets a deterministically derived
   sub-seed.
 - **`params`** — agent-specific parameters. See the agent class docstring. Unknown keys

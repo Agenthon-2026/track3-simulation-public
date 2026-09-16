@@ -28,6 +28,8 @@ cdef enum:
     EV_ACCEPT = 1
     EV_EXEC = 2
     EV_CANCEL = 3
+    EV_PARTIAL = 4
+    EV_FILLED = 5
     LF_SEND_NA = 1
     LF_OID_NA = 2
     LF_PARENT_NA = 4
@@ -181,7 +183,7 @@ cdef struct LRow:
     int src
     int dst
     int mtype
-    int seq
+    long long seq
     unsigned char flags
 
 
@@ -590,13 +592,17 @@ cdef int _ord_fill(NAgent *a, long long oid, int qty) noexcept:
 
 
 cdef class CTrace:
+    # mode 1 records one bit per execution; mode 2 consumes that immutable map.
+    cdef int mode
+    cdef object partial, last_exec, sink
+    cdef Py_ssize_t exec_seen, chunk_rows
     cdef long long *ot
     cdef int *oev
     cdef int *oaid
     cdef unsigned char *oside
     cdef int *opx
     cdef int *osz
-    cdef int *ooid
+    cdef long long *ooid
     cdef Py_ssize_t n_o, cap_o
     cdef long long *qt
     cdef int *qaid
@@ -606,7 +612,14 @@ cdef class CTrace:
     cdef Py_ssize_t n_q, cap_q
 
     def __cinit__(self):
-        self.ot = self.oev = self.oaid = self.opx = self.osz = self.ooid = NULL
+        self.mode = 0
+        self.partial = bytearray()
+        self.last_exec = {}
+        self.sink = None
+        self.exec_seen = 0
+        self.chunk_rows = 262144
+        self.ot = self.ooid = NULL
+        self.oev = self.oaid = self.opx = self.osz = NULL
         self.oside = NULL
         self.qt = self.qaid = self.qpx = self.qsz = NULL
         self.qside = NULL
@@ -646,7 +659,7 @@ cdef class CTrace:
         self.oside = <unsigned char *>realloc(self.oside, c * sizeof(unsigned char))
         self.opx = <int *>realloc(self.opx, c * sizeof(int))
         self.osz = <int *>realloc(self.osz, c * sizeof(int))
-        self.ooid = <int *>realloc(self.ooid, c * sizeof(int))
+        self.ooid = <long long *>realloc(self.ooid, c * sizeof(long long))
         if self.ot == NULL or self.oev == NULL:
             raise MemoryError()
         self.cap_o = c
@@ -662,7 +675,23 @@ cdef class CTrace:
             raise MemoryError()
         self.cap_q = c
 
-    cdef void add_order_c(self, long long t, int ev, int aid, unsigned char is_bid, int px, int sz, int oid) except *:
+    cdef void add_order_c(self, long long t, int ev, int aid, unsigned char is_bid, int px, int sz, long long oid) except *:
+        cdef Py_ssize_t previous
+        if self.mode == 1:
+            if ev == EV_EXEC:
+                if self.exec_seen % 8 == 0:
+                    self.partial.append(0)
+                if oid in self.last_exec:
+                    previous = self.last_exec[oid]
+                    self.partial[previous // 8] |= 1 << (previous % 8)
+                self.last_exec[oid] = self.exec_seen
+                self.exec_seen += 1
+            return
+        if self.mode == 2 and ev == EV_EXEC:
+            if self.exec_seen // 8 >= len(self.partial):
+                raise ValueError("execution replay exceeded classification pass")
+            ev = EV_PARTIAL if self.partial[self.exec_seen // 8] & (1 << (self.exec_seen % 8)) else EV_FILLED
+            self.exec_seen += 1
         if self.n_o >= self.cap_o:
             self._grow_o()
         cdef Py_ssize_t i = self.n_o
@@ -676,6 +705,8 @@ cdef class CTrace:
         self.n_o = i + 1
 
     cdef void add_quote_c(self, long long t, unsigned char is_bid, int px, int sz, int aid) except *:
+        if self.mode == 1:
+            return
         if self.n_q >= self.cap_q:
             self._grow_q()
         cdef Py_ssize_t i = self.n_q
@@ -686,11 +717,20 @@ cdef class CTrace:
         self.qsz[i] = sz
         self.n_q = i + 1
 
+    cdef void flush(self) except *:
+        if self.sink is not None and (self.n_o or self.n_q):
+            self.sink.write(self.to_arrow())
+            self.n_o = self.n_q = 0
+
     def to_arrays(self):
         from fast_sim.extract import _stable_lexsort
         import numpy as np
 
         cdef Py_ssize_t i, n_order, n_quote, n, j
+        cdef int ev
+        cdef int[:] event_codes
+        cdef unsigned char[:] side_codes
+        cdef object[:] message_labels, side_labels
         n_order = self.n_o
         n_quote = self.n_q
         if n_order == 0 and n_quote == 0:
@@ -724,19 +764,29 @@ cdef class CTrace:
                 last_exec[int(oid_arr[pos])] = int(pos)
             msg = np.empty(n_order, dtype=object)
             side_str = np.empty(n_order, dtype=object)
+            # Typed views avoid a Python ndarray index and integer conversion for
+            # every row. Output labels, final-fill lookup and row order are unchanged.
+            event_codes = ev_arr
+            side_codes = side_b
+            message_labels = msg
+            side_labels = side_str
             for i in range(n_order):
-                ev = int(ev_arr[i])
+                ev = event_codes[i]
                 if ev == EV_EXEC:
-                    msg[i] = "ORDER_FILLED" if last_exec.get(int(oid_arr[i])) == i else "PARTIAL_FILL"
+                    message_labels[i] = "ORDER_FILLED" if last_exec.get(int(oid_arr[i])) == i else "PARTIAL_FILL"
                 elif ev == EV_SUBMIT:
-                    msg[i] = "ORDER_SUBMITTED"
+                    message_labels[i] = "ORDER_SUBMITTED"
                 elif ev == EV_ACCEPT:
-                    msg[i] = "ORDER_ACCEPTED"
+                    message_labels[i] = "ORDER_ACCEPTED"
                 elif ev == EV_CANCEL:
-                    msg[i] = "ORDER_CANCELLED"
+                    message_labels[i] = "ORDER_CANCELLED"
+                elif ev == EV_PARTIAL:
+                    message_labels[i] = "PARTIAL_FILL"
+                elif ev == EV_FILLED:
+                    message_labels[i] = "ORDER_FILLED"
                 else:
-                    msg[i] = "ORDER_REPLACED"
-                side_str[i] = "BID" if side_b[i] else "ASK"
+                    message_labels[i] = "ORDER_REPLACED"
+                side_labels[i] = "BID" if side_codes[i] else "ASK"
         else:
             t_arr = aid_arr = oid_arr = px_arr = sz_arr = msg = side_str = None
         if n_quote:
@@ -835,10 +885,16 @@ cdef class CTrace:
 
 
 cdef class CLedger:
+    cdef int mode
+    cdef object sink
+    cdef Py_ssize_t chunk_rows
     cdef LRow *rows
     cdef Py_ssize_t n, cap
 
     def __cinit__(self):
+        self.mode = 0
+        self.sink = None
+        self.chunk_rows = 262144
         self.rows = NULL
         self.n = self.cap = 0
 
@@ -856,9 +912,13 @@ cdef class CLedger:
 
     cdef Py_ssize_t append_c(
         self, long long mid, int src, int dst, long long t_send, long long t_recv,
-        long long lat, int mtype, long long oid, long long parent, int seq,
+        long long lat, int mtype, long long oid, long long parent, long long seq,
         unsigned char flags,
     ) except -1:
+        if self.mode == 1:
+            return 0
+        if self.mode == 2 and self.n >= self.chunk_rows:
+            self.flush()
         if self.n >= self.cap:
             self._grow()
         cdef Py_ssize_t i = self.n
@@ -876,6 +936,11 @@ cdef class CLedger:
         r.flags = flags
         self.n = i + 1
         return i
+
+    cdef void flush(self) except *:
+        if self.sink is not None and self.n:
+            self.sink.write(self.to_arrow())
+            self.n = 0
 
     def to_arrays(self):
         import numpy as np
@@ -1117,6 +1182,7 @@ cdef class NativeSim:
     cdef object bids
     cdef object asks
     cdef object pending
+    cdef object exec_pending, exec_closed
     cdef object mts
     cdef object lat_rs
     cdef object oracle
@@ -1171,6 +1237,8 @@ cdef class NativeSim:
         self.bids = []
         self.asks = []
         self.pending = {}
+        self.exec_pending = {}
+        self.exec_closed = set()
         self.mts = []
         self.lat_rs = None
         self.oracle = None
@@ -1249,15 +1317,22 @@ cdef class NativeSim:
         ev.message_id = mid
         ev.kind = kind
         self.q._push_raw(ev[0])
+        if self.trace.mode == 1 and kind == KIND_EXEC:
+            self.exec_pending[oid] = self.exec_pending.get(oid, 0) + 1
+        if self.ledger.mode == 1:
+            return
         flags = 0
         if oid_na:
             flags |= LF_OID_NA
         if self.causal == 0:
             flags |= LF_PARENT_NA
-        idx = self.ledger.append_c(
-            mid, sid, rid, sent, deliver, lat, mtype, oid, self.causal, -1, flags,
-        )
-        self.pending[(mid, rid)] = idx
+        if self.ledger.mode == 2:
+            self.pending[(mid, rid)] = (mid, sid, rid, sent, deliver, lat, mtype, oid, self.causal, flags)
+        else:
+            idx = self.ledger.append_c(
+                mid, sid, rid, sent, deliver, lat, mtype, oid, self.causal, -1, flags,
+            )
+            self.pending[(mid, rid)] = idx
 
     cdef void _enq_mid(self, int sid, int rid, int kind, Event *ev, long long delay, int mtype, long long mid, long long oid, bint oid_na) except *:
         """Enqueue with a pre-assigned message_id (MarketClosePrice broadcast)."""
@@ -1273,15 +1348,20 @@ cdef class NativeSim:
         ev.message_id = mid
         ev.kind = kind
         self.q._push_raw(ev[0])
+        if self.ledger.mode == 1:
+            return
         flags = 0
         if oid_na:
             flags |= LF_OID_NA
         if self.causal == 0:
             flags |= LF_PARENT_NA
-        idx = self.ledger.append_c(
-            mid, sid, rid, sent, deliver, lat, mtype, oid, self.causal, -1, flags,
-        )
-        self.pending[(mid, rid)] = idx
+        if self.ledger.mode == 2:
+            self.pending[(mid, rid)] = (mid, sid, rid, sent, deliver, lat, mtype, oid, self.causal, flags)
+        else:
+            idx = self.ledger.append_c(
+                mid, sid, rid, sent, deliver, lat, mtype, oid, self.causal, -1, flags,
+            )
+            self.pending[(mid, rid)] = idx
 
     cdef void _wakeup_at(self, int aid, long long when) except *:
         cdef Event ev
@@ -1475,7 +1555,7 @@ cdef class NativeSim:
         ev.order = o
         self._enq(a.id, a.exchange_id, KIND_LIMIT, &ev, 0, 4, o.order_id, 0)
         if a.log_orders:
-            self.trace.add_order_c(self.now, EV_SUBMIT, a.id, is_bid, px, qty, <int>o.order_id)
+            self.trace.add_order_c(self.now, EV_SUBMIT, a.id, is_bid, px, qty, o.order_id)
 
     cdef void _cancel_all(self, NAgent *a) except *:
         cdef Py_ssize_t i
@@ -1566,18 +1646,36 @@ cdef class NativeSim:
 
     cdef void _on_exec(self, NAgent *a, COrder *o) except *:
         cdef int fp = o.fill_price if o.fill_price >= 0 else 0
+        cdef Py_ssize_t old_count = a.n_ord
+        cdef long long remaining
         if a.log_orders:
-            self.trace.add_order_c(self.now, EV_EXEC, o.agent_id, o.side, fp, o.quantity, <int>o.order_id)
+            self.trace.add_order_c(self.now, EV_EXEC, o.agent_id, o.side, fp, o.quantity, o.order_id)
         _ord_fill(a, o.order_id, o.quantity)
+        if self.trace.mode == 1:
+            remaining = self.exec_pending[o.order_id] - 1
+            if remaining:
+                self.exec_pending[o.order_id] = remaining
+            else:
+                del self.exec_pending[o.order_id]
+            if a.n_ord < old_count:
+                self.exec_closed.add(o.order_id)
+            if not remaining and o.order_id in self.exec_closed:
+                self.exec_closed.discard(o.order_id)
+                self.trace.last_exec.pop(o.order_id, None)
 
     cdef void _on_accept(self, NAgent *a, COrder *o) except *:
         if a.log_orders:
-            self.trace.add_order_c(self.now, EV_ACCEPT, o.agent_id, o.side, o.limit_price, o.quantity, <int>o.order_id)
+            self.trace.add_order_c(self.now, EV_ACCEPT, o.agent_id, o.side, o.limit_price, o.quantity, o.order_id)
 
     cdef void _on_cancel(self, NAgent *a, COrder *o) except *:
         if a.log_orders:
-            self.trace.add_order_c(self.now, EV_CANCEL, o.agent_id, o.side, o.limit_price, o.quantity, <int>o.order_id)
+            self.trace.add_order_c(self.now, EV_CANCEL, o.agent_id, o.side, o.limit_price, o.quantity, o.order_id)
         _ord_remove(a, o.order_id)
+        if self.trace.mode == 1:
+            if o.order_id in self.exec_pending:
+                self.exec_closed.add(o.order_id)
+            else:
+                self.trace.last_exec.pop(o.order_id, None)
 
     cdef void _sched_wake(self, NAgent *a) except *:
         cdef Event ev
@@ -1690,7 +1788,10 @@ cdef class NativeSim:
         cdef object key = (mid, rid)
         cdef object idx = self.pending.pop(key, None)
         if idx is not None:
-            self.ledger.rows[<Py_ssize_t>idx].seq = <int>self.seq
+            if self.ledger.mode == 2:
+                self.ledger.append_c(idx[0], idx[1], idx[2], idx[3], idx[4], idx[5], idx[6], idx[7], idx[8], self.seq, idx[9])
+            else:
+                self.ledger.rows[<Py_ssize_t>idx].seq = self.seq
         self.seq += 1
 
     def setup(self, spec):
@@ -1793,6 +1894,8 @@ cdef class NativeSim:
         cdef NAgent *a
         while (not self.q.empty()) and self.now and self.now <= self.stop_time:
             ev = self.q.pop_ev()
+            if self.trace.mode == 2 and ev.deliver_at != self.now and self.trace.n_o + self.trace.n_q >= self.trace.chunk_rows:
+                self.trace.flush()
             kind = ev.kind
             sid = ev.sender_id
             rid = ev.recipient_id
@@ -1807,7 +1910,7 @@ cdef class NativeSim:
                 self.atime[rid] = self.now
                 self.causal = mid
                 self.ledger.append_c(
-                    mid, rid, rid, 0, self.now, 0, 0, 0, 0, <int>self.seq,
+                    mid, rid, rid, 0, self.now, 0, 0, 0, 0, self.seq,
                     LF_SEND_NA | LF_OID_NA | LF_PARENT_NA,
                 )
                 self.seq += 1
@@ -1837,6 +1940,33 @@ def run_native_sim(spec):
     sim.setup(spec)
     sim.run_loop()
     return sim.result()
+
+
+def classify_native_executions(spec):
+    """Return one future-dependent fill bit per execution, without full traces."""
+    cdef NativeSim sim = NativeSim()
+    sim.trace.mode = sim.ledger.mode = 1
+    sim.setup(spec)
+    sim.run_loop()
+    return bytes(sim.trace.partial), sim.trace.exec_seen
+
+
+def stream_native_sim(spec, partial, expected_executions, trace_sink, ledger_sink, chunk_rows=262144):
+    """Replay exactly, flushing only at timestamp boundaries for trace ordering."""
+    if chunk_rows < 1:
+        raise ValueError("chunk_rows must be positive")
+    cdef NativeSim sim = NativeSim()
+    sim.trace.mode = sim.ledger.mode = 2
+    sim.trace.partial = partial
+    sim.trace.sink = trace_sink
+    sim.ledger.sink = ledger_sink
+    sim.trace.chunk_rows = sim.ledger.chunk_rows = chunk_rows
+    sim.setup(spec)
+    sim.run_loop()
+    if sim.trace.exec_seen != expected_executions:
+        raise ValueError("execution replay disagrees with classification pass")
+    sim.trace.flush()
+    sim.ledger.flush()
 
 
 cdef class NativeOracle:

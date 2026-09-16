@@ -47,6 +47,7 @@ import json
 import os
 import shutil
 import statistics
+import threading
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -56,22 +57,46 @@ from . import node_fingerprint
 from .timer import DEFAULT_RUN_TIMEOUT_SEC, gpu_docker_args, timed_container_run
 
 
+# Local reception adds no byte ceiling below the bounded scratch filesystem.
+# The official Track 3 output cap is unpublished; this is a developer assumption,
+# not an override of the production Runner's C3 policy.
+LOCAL_DISK_BYTES = 10 * 1024**3
+
+
+def retention_byte_limits(byte_limit: int | None = None) -> dict[str, int]:
+    """Allow any output that fits the declared local runtime disk to be retained."""
+    cap = LOCAL_DISK_BYTES if byte_limit is None else byte_limit
+    if not isinstance(cap, int) or cap <= 0:
+        raise ValueError("local output byte limit must be positive")
+    return {"max_file_bytes": cap, "max_total_bytes": cap}
+
+
 @dataclass
 class UnitRun:
     """One timed invocation of a unit."""
 
     events_per_sec: float
-    n_events: int  # host-counted from the emitted trace; numerator of the ranked rate
+    n_events: int  # host-counted from the emitted trace; numerator of the local rate
     reported_n_events: int  # what the submission declared; kept for the audit trail
     host_wall_clock_sec: float
     host_gpu_seconds: float | None
     host_peak_memory_bytes: int | None
     returncode: int
+    host_peak_disk_bytes: int | None = None
+    disk_capacity_bytes: int | None = None
+
+
+class UnitExecutionError(RuntimeError):
+    """A failed invocation with its host timing and resource evidence preserved."""
+
+    def __init__(self, message: str, measurement: UnitRun) -> None:
+        super().__init__(message)
+        self.measurement = measurement
 
 
 @dataclass
 class UnitRecord:
-    """The authoritative record for one unit: what the scoring side should consume."""
+    """A local developer measurement; never consumed by the production scorer."""
 
     unit: str
     verb: str
@@ -100,6 +125,7 @@ class UnitRecord:
             # the previous version of this record called itself "authoritative" and the scorer
             # believed it.
             "telemetry_source": "local_harness",
+            "retention_byte_limits": retention_byte_limits(),
             "profile": "developer",
             "rankable": False,
         }
@@ -149,7 +175,9 @@ def _host_n_events(out_dir: Path, batch: bool) -> int:
     return int(pq.ParquetFile(out_dir / "trace.parquet").metadata.num_rows)
 
 
-def retain_output(out_dir: Path, destination: Path, unit_dir: Path) -> None:
+def retain_output(
+    out_dir: Path, destination: Path, unit_dir: Path, *, byte_limit: int | None = None
+) -> None:
     """Copy the run's output into ``destination`` through the shared C3 no-follow primitives.
 
     Two measured defects are closed here.
@@ -176,6 +204,7 @@ def retain_output(out_dir: Path, destination: Path, unit_dir: Path) -> None:
     Imported lazily so the argv and routing tests, which run in the secret-free CI job, do not need
     the toolkit.
     """
+    from qfbench2_common.contracts.artifact_tree import TreeLimits
     from qfbench2_common.sanitize import (
         TreeRefused,
         materialize_tree,
@@ -190,9 +219,10 @@ def retain_output(out_dir: Path, destination: Path, unit_dir: Path) -> None:
         shutil.rmtree(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     staging = staging_sibling(destination)
+    limits = TreeLimits(**retention_byte_limits(byte_limit))
     try:
         result = materialize_tree(
-            out_dir, staging, allowed_paths=allowed_paths_for(unit_dir)
+            out_dir, staging, allowed_paths=allowed_paths_for(unit_dir), limits=limits
         )
         if result.unsafe_modes:
             raise TreeRefused(
@@ -209,7 +239,7 @@ def retain_output(out_dir: Path, destination: Path, unit_dir: Path) -> None:
             )
         if not result.files:
             raise TreeRefused("the run produced no accepted output files")
-        errors = verify_destination(staging, result.files)
+        errors = verify_destination(staging, result.files, limits=limits)
         if errors:
             raise TreeRefused("the copied tree did not verify: " + "; ".join(errors))
         promote(staging, destination)
@@ -229,6 +259,10 @@ def run_once(
     keep_output: Path | None = None,
     timeout_sec: float = DEFAULT_RUN_TIMEOUT_SEC,
     run_as_host_user: bool = False,
+    scratch_root: Path | None = None,
+    bounded_disk: bool = False,
+    disk_limit_bytes: int = LOCAL_DISK_BYTES,
+    log_dir: Path | None = None,
 ) -> UnitRun:
     """One timed, DEADLINE-BOUNDED container invocation of the unit.
 
@@ -238,16 +272,27 @@ def run_once(
     leaves a root-owned temp directory behind. What it must never do -- and what the deleted
     ``_reclaim_output`` did -- is run the PARTICIPANT'S IMAGE again to chown the tree.
     """
+    capacity = None
+    if bounded_disk:
+        if scratch_root is None or os.name != "posix":
+            raise ValueError("bounded disk requires a dedicated Linux scratch mount")
+        fs = os.statvfs(str(scratch_root))
+        capacity = fs.f_blocks * fs.f_frsize
+        if not 0 < capacity <= disk_limit_bytes:
+            raise ValueError("scratch filesystem exceeds the declared disk byte limit")
     with (
-        tempfile.TemporaryDirectory(prefix="t3_in_") as in_tmp,
+        tempfile.TemporaryDirectory(prefix="t3_in_", dir=scratch_root) as in_tmp,
         tempfile.TemporaryDirectory(
-            prefix="t3_out_", ignore_cleanup_errors=True
+            prefix="t3_out_", dir=scratch_root, ignore_cleanup_errors=True
         ) as out_tmp,
-        tempfile.TemporaryDirectory(prefix="t3_cid_") as cid_tmp,
+        tempfile.TemporaryDirectory(prefix="t3_cid_", dir=scratch_root) as cid_tmp,
     ):
         in_dir, out_dir = Path(in_tmp), Path(out_tmp)
         _stage_input(unit_dir, in_dir, batch)
         cidfile = Path(cid_tmp) / "container.cid"
+
+        temp_dir = in_dir / "tmp"
+        temp_dir.mkdir()
 
         verb_args = (
             [
@@ -281,19 +326,89 @@ def run_once(
             "-v",
             f"{out_dir}:/output",
         ]
+        if bounded_disk:
+            cmd += ["--read-only", "-v", f"{temp_dir}:/tmp"]
         if run_as_host_user and os.name == "posix":
             cmd += ["--user", f"{os.getuid()}:{os.getgid()}"]
         cmd += [image, *verb_args]
 
-        proc, wall_clock, gpu_s, peak_mem = timed_container_run(
-            cmd, cidfile=cidfile, gpus=gpus, timeout_sec=timeout_sec
+        disk_peak = [0]
+        stop = threading.Event()
+
+        def sample_disk() -> None:
+            while not stop.is_set():
+                fs = os.statvfs(str(scratch_root))
+                disk_peak[0] = max(
+                    disk_peak[0], (fs.f_blocks - fs.f_bfree) * fs.f_frsize
+                )
+                stop.wait(0.05)
+
+        sampler = (
+            threading.Thread(target=sample_disk, daemon=True) if bounded_disk else None
         )
+        if sampler:
+            sampler.start()
+        try:
+            proc, wall_clock, gpu_s, peak_mem = timed_container_run(
+                cmd, cidfile=cidfile, gpus=gpus, timeout_sec=timeout_sec
+            )
+        finally:
+            stop.set()
+            if sampler:
+                sampler.join(timeout=2)
+        if bounded_disk:
+            fs = os.statvfs(str(scratch_root))
+            disk_peak[0] = max(disk_peak[0], (fs.f_blocks - fs.f_bfree) * fs.f_frsize)
+        if log_dir is not None:
+            log_dir.mkdir(parents=True, exist_ok=True)
+            (log_dir / "stdout.log").write_bytes(proc.stdout)
+            (log_dir / "stderr.log").write_bytes(proc.stderr)
+            # Durable before retention or any Parquet parser: SIGKILL cannot be caught.
+            with (log_dir / "execution.json").open("x") as handle:
+                json.dump(
+                    {
+                        "image": image,
+                        "unit": unit_dir.name,
+                        "rankable": False,
+                        "returncode": proc.returncode,
+                        "host_wall_clock_sec": wall_clock,
+                        "host_gpu_seconds": gpu_s,
+                        "host_peak_memory_bytes": peak_mem,
+                        "host_peak_disk_bytes": disk_peak[0] if bounded_disk else None,
+                        "disk_capacity_bytes": capacity,
+                    },
+                    handle,
+                    allow_nan=False,
+                )
+                handle.flush()
+                os.fsync(handle.fileno())
         if proc.returncode != 0:
+            from qfbench2_common.sanitize import TreeRefused
+
             tail = proc.stderr[-2000:].decode("utf-8", errors="replace")
-            raise RuntimeError(
+            if keep_output is not None and any(out_dir.iterdir()):
+                try:
+                    retain_output(
+                        out_dir, keep_output, unit_dir, byte_limit=disk_limit_bytes
+                    )
+                except (OSError, ValueError, TreeRefused) as exc:
+                    if log_dir is not None:
+                        (log_dir / "retention-error.log").write_text(str(exc))
+            raise UnitExecutionError(
                 f"Container exited with code {proc.returncode} on {unit_dir.name} "
                 f"(a negative code means the {timeout_sec:g}s deadline fired and the container "
-                f"was killed).\n{tail}"
+                f"was killed).\n{tail}",
+                UnitRun(
+                    0.0,
+                    0,
+                    0,
+                    wall_clock,
+                    gpu_s,
+                    peak_mem,
+                    proc.returncode,
+                    disk_peak[0] if bounded_disk else None,
+                    capacity,
+                ),
             )
 
         # Both halves of the local rate are the harness's: the event count comes from the emitted
@@ -309,10 +424,18 @@ def run_once(
             )
 
         if keep_output is not None:
-            retain_output(out_dir, keep_output, unit_dir)
+            retain_output(out_dir, keep_output, unit_dir, byte_limit=disk_limit_bytes)
         eps = n_events / wall_clock if wall_clock > 0 else 0.0
         return UnitRun(
-            eps, n_events, reported, wall_clock, gpu_s, peak_mem, proc.returncode
+            eps,
+            n_events,
+            reported,
+            wall_clock,
+            gpu_s,
+            peak_mem,
+            proc.returncode,
+            disk_peak[0] if bounded_disk else None,
+            capacity,
         )
 
 

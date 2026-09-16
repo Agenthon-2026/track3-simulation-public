@@ -278,14 +278,15 @@ def check_tier_a(
     """
     breaches: list[str] = []
 
-    # 0. Exact event count. Deterministic scenario, deterministic reference: a faithful run emits
-    #    exactly as many rows. This is also the numerator defence -- extra rows raise the ranked
-    #    events/sec, so tolerating them here would pay for padding.
+    # 0. Exact event count. The emitted trace must match the reference's count.
+    # Extra rows raise the ranked events/sec, so tolerating them would pay for padding.
     if len(candidate_df) != len(reference_df):
         breaches.append(
             f"Event count mismatch: candidate={len(candidate_df)}, "
-            f"reference={len(reference_df)}. The scenario is deterministic; the emitted row count "
-            "must match exactly."
+            f"reference={len(reference_df)}. The emitted row count must match exactly. "
+            "A shared seed alone does not guarantee the reference trace: different random "
+            "choices can change message delivery and market events. The check compares "
+            "outputs, not RNG implementations. See the Tier-A note in README.md."
         )
 
     ref_fills = reference_df[reference_df["msg_type"].isin(FILL_MSG_TYPES)].reset_index(

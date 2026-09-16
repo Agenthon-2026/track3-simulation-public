@@ -29,6 +29,23 @@ descending, measured by the RUNNER on the official benchmark hardware (see
 and the SimProfile verifier. **None of it re-orders the primary `events/sec` leaderboard** —
 these signals are *reported, not ranked*.
 
+Local retained output defaults to **10 GiB per file and 10 GiB per invocation**, including
+all subs of a batch. The authorized local arm64 experiment freezes
+`--execution-platform linux/arm64 --disk-gib 64` in its benchmark plan, allowing
+64 GiB for both the bounded scratch disk and retained output. This matches the
+bounded local scratch disk, so reception does not add
+a smaller byte ceiling to a completed run. The earlier shared defaults of 64 MiB/file and
+256 MiB/tree rejected validly named large traces before local scoring. Both the copy and its
+verification use the same expanded limits; records include `retention_byte_limits`.
+The path allowlist, file-count/depth bounds and no-follow checks still apply.
+This is a local experiment assumption while the official output cap remains unpublished
+([organizer reply](https://github.com/Agenthon-2026/track3-simulation-public/issues/1#issuecomment-5534948011)),
+not proof of platform acceptance. The card's `disk = "10G"` and the local runtime disk cap
+remain the default for amd64. The arm64 results carry `qualification_scope: local-arm64`
+and cannot share promotion history with another platform or resource policy. Official
+10G adaptation requires separate acceptance. A complete trace must still fit the
+declared disk; a shorter diagnostic cannot qualify it.
+
 They are computed on the DEVELOPER profile only. On the official path the private
 `final_scorer` omits them and records why: GPU-award eligibility keys on measured GPU
 utilization, and the C2 telemetry block does not yet carry a participant-cgroup-attributed GPU
@@ -57,14 +74,17 @@ six required keys).
 
 ---
 
-## 2. `timer.py` — re-timing protocol
+## 2. `timer.py` — local timing protocol
 
-The canonical throughput measurement. Runs a candidate Docker image N times (default 5) with
+The developer measurement runs a candidate Docker image N times (default 5) with
 seeds drawn from a seed family derived from the scenario's base seed, **discards the first run
 as warm-up**, and reports the **median `events/sec`** plus the full distribution. Warm-up is
 discarded to remove cold-start effects (JIT/XLA kernel compilation, OS page cache, Python
 import overhead) that are not intrinsic to the simulator; `--no-discard-warmup` includes all
-runs for pure-binary submissions. This protocol is unchanged.
+runs for pure-binary submissions. These are local defaults, not the final evaluation plan.
+Official repeat counts and warm-up treatment are committed in that plan; the official scorer
+requires each measured repeat to reproduce the scored output, rather than substituting this
+tool's varying-seed runs.
 
 ```
 python timer.py \
@@ -91,7 +111,7 @@ efficiency, efficiency_unit, memory_efficiency, telemetry_self_reported, gpu_uti
 
 | Diagnostic | Field | Definition |
 |---|---|---|
-| Speedup | `speedup_vs_cpu_abides` | submission `events/sec` ÷ CPU-ABIDES baseline `events/sec` (same fixed-SKU box) |
+| Speedup | `speedup_vs_cpu_abides` | submission `events/sec` ÷ the supplied CPU-ABIDES reference rate; comparable only when the measurement conditions match |
 | Efficiency | `efficiency` | `events/sec` ÷ GPU-hours when `gpu_seconds > 0` (the run actually used the device) **or** ÷ CPU-core-hours (`cpus × wall_clock_sec`) otherwise; `efficiency_unit` is `events_per_gpu_hour` or `events_per_cpu_core_hour` |
 | Memory efficiency | `memory_efficiency` | `n_events` ÷ `peak_memory_bytes` (events per resident byte; higher = more compact) |
 | GPU utilization | `gpu_utilization` | measured `gpu_seconds` ÷ `wall_clock_sec`. **Eligibility signal, never ranked on** — it is how the GPU award separates "the device was attached" from "the device was used" (§6) |
@@ -122,7 +142,7 @@ python -m throughput.report --submission <out_dir> --reference <ref_dir> --out r
 Both dirs hold one `<unit>/events.json` per unit, matched by subdirectory name. Output JSON:
 `{"units": {<unit>: <Diagnostics>...}, "aggregate": {"median_speedup_vs_cpu_abides",
 "median_efficiency", "median_memory_efficiency", "n_units"}}` (medians skip `None`). Emitted
-beside the live `events/sec` leaderboard; it does not re-order the primary ranking.
+as a local report; it neither establishes a live leaderboard result nor re-orders the primary ranking.
 
 ---
 
@@ -195,35 +215,28 @@ absent or poor profile.
 
 ---
 
-## 8. How these reach the result
+## 8. Local reports and official scoring
 
-The private `scoring/final_scorer.py` calls `throughput.report.build_report(output_dir,
-reference_dir)` and stores the result on `FinalScore.secondary_diagnostics` — the Phase-4
-median speedup / efficiency / memory-efficiency across units, serialized to the leaderboard
-JSON alongside `median_events_per_sec` and the throughput CI. It is `None` for inadmissible
-submissions. The leaderboard is sorted by `leaderboard_score` (= `median_events_per_sec`);
-`secondary_diagnostics`, the frontier, and the awards ride alongside and **never change that
-order**.
+`throughput.report.build_report(output_dir, reference_dir)` produces developer diagnostics.
+The official scoring path omits those diagnostics and records the reason, as described at
+the top of this page. The existence of a local speedup or award calculation does not establish
+the corresponding official measurement or a leaderboard column.
+
+The primary score is the arithmetic mean of per-unit rates over the complete evaluation roster,
+not the median of a throughput-only subset. An admissible submission retains its score and
+rank when the informational `t3.throughput_nonimproving` label is present; see
+`../baselines/README.md` §3.
 
 ### The ranked number's provenance
 
-`median_events_per_sec` itself now comes from the harness whenever the worker measured it.
-`run_unit --host-metrics-out` writes `host_metrics.json` at the root of the run outputs, carrying
-`host_events_per_sec` — the median of the per-run rates over the **scored** runs, each rate being
-the harness's event count (the emitted trace's parquet row count) over the harness's own wall
-clock. Both the public gate (`qfbench2_track_simulation.scoring`) and the private oracle read it
-through the shared `qfbench2_track_simulation.host_metrics`, so the two rank identically.
+For each official unit, `telemetry.ranked_timing` derives the median of the measured repeat
+rates from trusted C1/C2 evidence. It checks the committed repeat policy, measurement controls,
+and agreement with the scored output. `host_metrics.json` and the participant's `events.json`
+remain useful locally but cannot replace that evidence.
 
-This matters because a submission's self-reported `events_per_sec` is self-consistent by
-construction: g1 checks it against `n_events / wall_clock_sec` and g3 pins `n_events` to the real
-trace row count, but **`wall_clock_sec` is supplied by the submission and compared against
-nothing**. An honest trace plus a fabricated wall clock passes every gate at an arbitrary rank.
+There are two separately named factories:
 
-**That hole is closed, and it was closed by deleting the choice rather than by adding a flag.**
-
-There are now two separately named factories, and no environment variable selects between them:
-
-| Factory | Score source | `rankable` | Reachable from the platform driver |
+| Factory | Score source | `rankable` | Used for official ranking |
 |---|---|---|---|
 | `build_verifier` (**production**) | trusted C1 + C2 timing only | `True` | yes |
 | `build_developer_verifier` | harness file, else the self-report | **always `False`** | no |

@@ -43,9 +43,14 @@ __all__ = [
     "MAX_DEPTH",
     "PROFILE_SIDECAR",
     "SINGLE_UNIT_FILES",
+    "STABLE_OUTPUT_FILES",
     "SUB_FILES",
+    "VOLATILE_EVENTS_FIELDS",
+    "VOLATILE_OUTPUT_FILES",
     "allowed_paths_for",
     "max_rows_for",
+    "stable_paths_for",
+    "volatile_paths_for",
 ]
 
 #: The optional profiling sidecar the Best Systems Diagnosis award reads (see the module note).
@@ -66,6 +71,47 @@ SUB_FILES: tuple[str, ...] = (
 )
 MAX_DEPTH = 2
 
+#: Output members whose BYTES are reproducible across repeats of the same unit.
+#:
+#: A Track 3 scenario is deterministic given its seed, so a faithful submission emits the same
+#: parquet bytes every time. These are the members a cross-repeat byte comparison can be made
+#: against.
+STABLE_OUTPUT_FILES: tuple[str, ...] = ("trace.parquet", "message_trace.parquet")
+
+#: Output members whose bytes CANNOT be reproducible, because they report measurements of the run.
+#:
+#: This list did not exist until now, and its absence is the whole of
+#: `track3-simulation-public#5` / `Agenthon2026#116`: the repeat check compares a byte digest of
+#: the WHOLE output tree across repeats, `events.json` is inside that tree, and `events.json` must
+#: carry a real `wall_clock_sec`. An honest submission therefore diverges on every repeat and is
+#: refused. It is invisible in Development, which ranks through `build_developer_verifier` on the
+#: self-reported branch, and first bites in the Final phase.
+#:
+#: Naming the set here, beside the allowlist that already owns "what may appear in /output", is the
+#: prerequisite for every candidate repair: excluding these from the digest, canonicalising their
+#: volatile fields before hashing, or comparing them semantically all need this list to exist.
+VOLATILE_OUTPUT_FILES: tuple[str, ...] = (
+    "events.json",
+    "batch_events.json",
+    PROFILE_SIDECAR,
+)
+
+#: The `events.json` fields that measure the run and so cannot be byte-stable.
+#:
+#: Three prose lists of this set exist and no two agree: the starter pack names three fields and
+#: omits `gpu_seconds`, then twelve lines later treats `gpu_seconds` as a legitimate extra, and
+#: `Agenthon2026#116` names a third set omitting `events_per_sec`. This is the machine-readable
+#: one. Everything NOT in here is reproducible from the scenario and the seed: `scenario_id`,
+#: `n_events`, `seed`, `trace_sha256`.
+VOLATILE_EVENTS_FIELDS: frozenset[str] = frozenset(
+    {
+        "wall_clock_sec",
+        "events_per_sec",
+        "peak_memory_bytes",
+        "gpu_seconds",
+    }
+)
+
 
 def allowed_paths_for(unit_dir: str | Path) -> tuple[str, ...]:
     """The exact relative paths a submission for this unit may write.
@@ -83,6 +129,24 @@ def allowed_paths_for(unit_dir: str | Path) -> tuple[str, ...]:
         sub = str(entry["sub"])
         paths.extend(f"{sub}/{name}" for name in SUB_FILES)
     return tuple(paths)
+
+
+def stable_paths_for(unit_dir: str | Path) -> tuple[str, ...]:
+    """The allowed paths for this unit whose bytes a faithful submission reproduces exactly."""
+    return tuple(
+        p
+        for p in allowed_paths_for(unit_dir)
+        if p.rsplit("/", 1)[-1] in STABLE_OUTPUT_FILES
+    )
+
+
+def volatile_paths_for(unit_dir: str | Path) -> tuple[str, ...]:
+    """The allowed paths for this unit that report measurements and so cannot be byte-stable."""
+    return tuple(
+        p
+        for p in allowed_paths_for(unit_dir)
+        if p.rsplit("/", 1)[-1] in VOLATILE_OUTPUT_FILES
+    )
 
 
 def max_rows_for(reference_rows: int, *, slack: float = 0.0) -> int:

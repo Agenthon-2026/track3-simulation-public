@@ -6,6 +6,33 @@ on:
     branches: [main, "task/**", "track3/**"]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      build_native:
+        description: "Rebuild, test and export native modules on the fixed runtime"
+        type: boolean
+        default: false
+      candidate_image:
+        description: "Immutable candidate image for native qualification (empty runs CI only)"
+        type: string
+        required: false
+      baseline_image:
+        description: "Qualified immutable B0 image for paired screening or confirmation"
+        type: string
+        required: false
+      hypothesis:
+        description: "Predeclared change being tested against B0"
+        type: string
+        default: "Qualify the repaired exact CPU baseline"
+      reference_image:
+        description: "Immutable ABIDES reference image for parameter differentials"
+        type: string
+        required: false
+      measurement_purpose:
+        description: "Screen first; confirmation requires B0 and a fresh candidate"
+        type: choice
+        options: [screen, baseline, confirmation]
+        default: screen
 
 env:
   # The single place this workflow names a toolkit revision. Both jobs that install
@@ -15,7 +42,7 @@ env:
   # contract set, and it is the SAME string the README's install command pins. It must stay a
   # tag and never a branch: an unpinned toolkit means a local result and a scored result can
   # diverge silently, which is the one failure mode the pin exists to prevent.
-  QFBENCH2_COMMON_REF: v2.3.1
+  QFBENCH2_COMMON_REF: v2.4.1
 
 jobs:
   # Runs FIRST and does not install the shared toolkit, so it survives anything that can go
@@ -60,6 +87,8 @@ jobs:
       # toolkit and not even pyarrow, and must not be skippable on a fork PR.
       - name: Developer-profile guard (no rankable self-report fallback)
         run: python tests/test_host_metrics.py
+      - name: Standalone timer JSON profile (stdlib only, no Docker)
+        run: python tests/test_timer_profile.py
       # Card drift guard. Cards are GENERATED, so a value edited in units/ but not in the generator
       # survives only until the next regeneration -- which is how every card came to carry
       # `gpu = true` while both generators still emitted `false`. Stdlib-only; its one
@@ -125,6 +154,8 @@ jobs:
         run: python -m pytest tests/test_telemetry_binding.py -q
       - name: Semantic exactness tests (no intersection, no prefix, no truncation, no NaN)
         run: python -m pytest tests/test_semantics_exactness.py -q
+      - name: Baseline clock compatibility and Tier-A RNG guidance
+        run: python -m pytest tests/test_tier_a_rng_contract.py -q
       - name: Message-ledger completeness tests (card declaration, reference-relative floor)
         run: python -m pytest tests/test_ledger_completeness.py -q
       - name: Clip-ceiling derivation tests (the C1 metric domain)
@@ -135,6 +166,8 @@ jobs:
         run: python -m pytest tests/test_malicious_output.py -q
       - name: Contract-boundary tests (Hub C1/C2/C5/C7 fixtures)
         run: python -m pytest tests/test_contract_boundary.py -q
+      - name: Shared scorer version (pyproject <-> SCORER_VERSION <-> package)
+        run: python -m pytest tests/test_scorer_version.py -q
       # Re-run with the toolkit present so the cluster_key check actually executes: it imports
       # qfbench2_track_simulation, so in the firewall job it reports SKIP rather than running.
       # QFB2_T3_REQUIRE_TOOLKIT turns that SKIP into a FAILURE here, because in this job the
@@ -183,3 +216,184 @@ jobs:
         env:
           QFB2_T3_REQUIRE_LFS: "1"
         run: python -m pytest tests/test_ledger_completeness.py -q
+
+  native-build:
+    name: Build and verify native candidate
+    if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.build_native)
+    needs: [firewall, lint-type, validate-units]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}:native-${{ github.sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          lfs: true
+      - name: Rebuild native extensions on the fixed runtime
+        run: docker build --platform linux/amd64 -f baselines/Dockerfile.native-candidate -t "$IMAGE" .
+      - name: Exact streaming differentials in the candidate image
+        run: docker run --rm --network none --cpus 4 --memory 4g -v "$PWD:/workspace:ro" "$IMAGE" python /workspace/tests/integration/native_streaming_check.py
+      - name: Export tested native modules and build identity
+        run: |
+          mkdir -p native-overlay
+          container_id="$(docker create "$IMAGE")"
+          docker cp "$container_id:/opt/fast_sim" native-overlay/fast_sim
+          docker cp "$container_id:/opt/abides_fork" native-overlay/abides_fork
+          docker rm "$container_id"
+          docker image inspect "$IMAGE" > native-overlay/image.json
+          python - <<'PYCODE'
+          import hashlib, json, os
+          from pathlib import Path
+          root = Path('native-overlay')
+          hashes = {str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(root.rglob('*')) if p.is_file()}
+          (root/'build.json').write_text(json.dumps({'source_commit': os.environ['GITHUB_SHA'], 'rankable': False, 'files': hashes}, indent=2)+'\n')
+          PYCODE
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: native-image-${{ github.run_id }}
+          path: native-overlay/
+
+  native-qualification:
+    name: Native candidate qualification (non-rankable)
+    if: github.event_name == 'workflow_dispatch' && inputs.candidate_image != ''
+    permissions:
+      contents: read
+      actions: read
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: t3-native-${{ github.ref }}
+      cancel-in-progress: false
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          lfs: true
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.13"
+      - name: Install pinned verifier
+        run: |
+          python -m pip install "qfbench2-common[data] @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@${{ env.QFBENCH2_COMMON_REF }}#subdirectory=common" scipy
+      - name: Record actual instance and pull immutable images
+        env:
+          CANDIDATE_IMAGE: ${{ inputs.candidate_image }}
+          BASELINE_IMAGE: ${{ inputs.baseline_image }}
+          MEASUREMENT_PURPOSE: ${{ inputs.measurement_purpose }}
+          REFERENCE_IMAGE: ${{ inputs.reference_image }}
+        run: |
+          if [ "$MEASUREMENT_PURPOSE" = confirmation ] && [ -z "$BASELINE_IMAGE" ]; then
+            echo 'Confirmation requires a qualified baseline image' >&2
+            exit 1
+          fi
+          if [ "$MEASUREMENT_PURPOSE" = baseline ] && [ -n "$BASELINE_IMAGE" ]; then
+            echo 'Baseline qualification accepts one image' >&2
+            exit 1
+          fi
+          if [ "$CANDIDATE_IMAGE" = "$BASELINE_IMAGE" ]; then
+            echo 'Paired experiments require different images' >&2
+            exit 1
+          fi
+          mkdir -p out/native
+          docker info --format '{{json .}}' > out/native/docker-info.json
+          uname -a > out/native/uname.txt
+          free -b > out/native/memory.txt
+          docker pull "$CANDIDATE_IMAGE"
+          docker pull "$REFERENCE_IMAGE"
+          if [ -n "$BASELINE_IMAGE" ]; then docker pull "$BASELINE_IMAGE"; fi
+          python scripts/benchmark_candidates.py freeze --image "$CANDIDATE_IMAGE" --purpose baseline --round B0-native --hypothesis 'Qualify the repaired exact CPU baseline' --budget 18000 --history out/native/history --out out/native/probe-plan.json
+      - name: Restore unresolved failures from the prior native artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/restore_candidate_history.py --repo "$GITHUB_REPOSITORY" --branch "$GITHUB_REF_NAME" --current-run "$GITHUB_RUN_ID" --out out/native/history
+      - name: Independent public parameter differentials
+        env:
+          CANDIDATE_IMAGE: ${{ inputs.candidate_image }}
+          BASELINE_IMAGE: ${{ inputs.baseline_image }}
+          REFERENCE_IMAGE: ${{ inputs.reference_image }}
+        run: |
+          python scripts/validate_candidate_parameters.py generate --seed "$((GITHUB_RUN_ID % 1000000000))" --reference-image "$REFERENCE_IMAGE" --out out/native/holdouts
+          python scripts/validate_candidate_parameters.py run --plan out/native/holdouts/holdout.json --image "$CANDIDATE_IMAGE" --out out/native/parameters
+          if [ -n "$BASELINE_IMAGE" ]; then
+            python scripts/validate_candidate_parameters.py run --plan out/native/holdouts/holdout.json --image "$BASELINE_IMAGE" --out out/native/parameters-baseline
+          fi
+          python - <<'PYCODE'
+          import sys
+          from pathlib import Path
+          sys.path.insert(0, 'scripts')
+          import benchmark_candidates as b
+          import validate_candidate_parameters as p
+          import json
+          heldouts = {}
+          for folder in ('parameters', 'parameters-baseline'):
+              path = Path('out/native') / folder / 'heldout-result.json'
+              if path.exists():
+                  result = json.loads(path.read_text())
+                  p.validate(result, result['image'])
+                  heldouts[result['image']] = b.index(path)
+          b.save(Path('out/native/holdout-index.json'), heldouts)
+          PYCODE
+      - name: Preserve parameter evidence before long measurement
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: native-parameters-${{ github.run_id }}
+          path: out/native/
+          retention-days: 30
+      - name: Freeze native experiment and export confirmation reservation
+        env:
+          CANDIDATE_IMAGE: ${{ inputs.candidate_image }}
+          BASELINE_IMAGE: ${{ inputs.baseline_image }}
+          HYPOTHESIS: ${{ inputs.hypothesis }}
+          MEASUREMENT_PURPOSE: ${{ inputs.measurement_purpose || 'screen' }}
+        run: |
+          if [ "$MEASUREMENT_PURPOSE" = screen ]; then
+            run_budget=1200
+            unit_timeout=120
+          else
+            run_budget=18000
+            # The full exemplar's classification pass can outlast the old 30m
+            # developer deadline. Keep the whole experiment bounded separately.
+            unit_timeout=7200
+          fi
+          baseline_args=()
+          if [ -n "$BASELINE_IMAGE" ]; then baseline_args=(--baseline "$BASELINE_IMAGE"); fi
+          python scripts/benchmark_candidates.py freeze --image "$CANDIDATE_IMAGE" "${baseline_args[@]}" --purpose "$MEASUREMENT_PURPOSE" --round "$MEASUREMENT_PURPOSE-native" --hypothesis "$HYPOTHESIS" --timeout "$unit_timeout" --budget "$run_budget" --history out/native/history --holdout out/native/holdout-index.json --out out/native/plan.json
+          if [ "$MEASUREMENT_PURPOSE" = confirmation ]; then
+            python scripts/benchmark_candidates.py export-confirmation --plan out/native/plan.json --out out/native/reservations
+          fi
+      - name: Preserve confirmation opportunity before any measured invocation
+        if: inputs.measurement_purpose == 'confirmation'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: native-reservations-${{ github.run_id }}
+          path: out/native/reservations/
+          if-no-files-found: error
+          retention-days: 90
+      - name: Bounded native measurement with kernel memory telemetry
+        run: |
+          sudo mkdir -p /mnt/t3-scratch
+          sudo mount -t tmpfs -o size=10G,nodev,nosuid,mode=1777 t3-scratch /mnt/t3-scratch
+          python scripts/benchmark_candidates.py run --plan out/native/plan.json --scratch-volume /mnt/t3-scratch --out out/native/runs
+          python scripts/benchmark_candidates.py assess --evidence out/native/runs/evidence.json > out/native/assessment.json
+          python - <<'PYCODE'
+          import json
+          from pathlib import Path
+          result = json.loads(Path('out/native/assessment.json').read_text())
+          gate = {'screen': 'screen_status', 'baseline': 'G2', 'confirmation': 'G3'}[result['purpose']]
+          assert result[gate] == 'pass', result['reasons']
+          PYCODE
+      - name: Retain small failure history for the next native job
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: native-history-${{ github.run_id }}
+          path: out/native/history/
+          retention-days: 90
+      - name: Retain raw qualification evidence including failures
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: native-qualification-${{ github.run_id }}
+          path: out/native/
+          retention-days: 30

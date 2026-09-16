@@ -5,7 +5,8 @@
 #
 # Runtime network is none — every dependency is vendored here.
 # GPU is optional; this image is CPU-first (discrete-event order is sequential).
-FROM --platform=linux/amd64 python:3.11-slim
+ARG PYTHON_BASE=python:3.11-slim-bookworm@sha256:528257d48c1da0dcecc2e725d1ae34498d60c965f1241e39cd6a85a8859bdf84
+FROM ${PYTHON_BASE}
 
 LABEL qfbench2.interface_version="2.0"
 LABEL qfbench2.track="simulation"
@@ -13,6 +14,8 @@ LABEL qfbench2.category="simulator"
 
 ARG ABIDES_REPO=https://github.com/jpmorganchase/abides-jpmc-public.git
 ARG ABIDES_COMMIT=f9cbe51342b7dedd9587e4e069040d68a5c6477f
+ARG PIP_INDEX_URL=https://pypi.org/simple
+ARG DEBIAN_MIRROR=https://deb.debian.org
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -30,7 +33,8 @@ RUN pip install \
         pyarrow==15.0.2
 
 COPY baselines/patches/ /tmp/patches/
-RUN apt-get update \
+RUN sed -i "s|http://deb.debian.org|${DEBIAN_MIRROR}|g" /etc/apt/sources.list.d/debian.sources \
+    && apt-get update \
     && apt-get install -y --no-install-recommends git \
     && git clone "${ABIDES_REPO}" /tmp/abides \
     && git -C /tmp/abides checkout "${ABIDES_COMMIT}" \

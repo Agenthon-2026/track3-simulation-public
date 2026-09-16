@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any
 
 import numpy as np
@@ -32,7 +33,7 @@ def reset_abides_counters() -> None:
     setattr(Message, "_Message__message_id_counter", 1)
 
 
-def run_scenario(scenario: dict[str, Any]) -> tuple[Any, Any, dict[str, Any]]:
+def run_scenario(scenario: dict[str, Any], output_paths=None) -> tuple[Any, Any, dict[str, Any]]:
     """Execute ``scenario`` and return ``(trace_df, message_trace_df, end_state)``.
 
     The kernel, matching engine, agents, oracle and latency model are the pinned
@@ -44,7 +45,9 @@ def run_scenario(scenario: dict[str, Any]) -> tuple[Any, Any, dict[str, Any]]:
     apply_runtime_patches()
     reset_abides_counters()
 
-    config = build_config(scenario)
+    # build_config and the native path may mutate nested oracle parameters.
+    # Keep the caller input pristine so exception recovery starts from the same seed.
+    config = build_config(deepcopy(scenario))
     agents = config["agents"]
     slim_exchange(agents[0])
     slim_agents(agents)
@@ -53,13 +56,23 @@ def run_scenario(scenario: dict[str, Any]) -> tuple[Any, Any, dict[str, Any]]:
 
     if should_use_native(agents):
         try:
-            return run_native(config)
+            return run_native(config) if output_paths is None else run_native(config, output_paths)
+        except (OSError, MemoryError):
+            # Resource/storage failures cannot be repaired by rerunning the same
+            # workload through the more memory-intensive hybrid implementation.
+            raise
         except Exception as exc:
             import logging
+
             logging.getLogger("fast_sim").warning(
                 "Native C kernel failed on scenario (%s); safely falling back to hybrid path",
                 exc,
             )
+            reset_abides_counters()
+            config = build_config(deepcopy(scenario))
+            agents = config["agents"]
+            slim_exchange(agents[0])
+            slim_agents(agents)
 
     # abides_core.abides.run ignores config["random_state_kernel"] and constructs
     # Kernel(random_state=RandomState(seed=0)). Match that exactly so any latent

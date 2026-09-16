@@ -331,7 +331,7 @@ def test_retained_output_goes_through_the_no_follow_sanitizer() -> None:
         "the retention path must not fall back to a following copy"
     )
     # And run_once must actually route through it.
-    assert "retain_output(out_dir, keep_output, unit_dir)" in inspect.getsource(ru.run_once)
+    assert "retain_output(out_dir, keep_output, unit_dir, byte_limit=disk_limit_bytes)" in inspect.getsource(ru.run_once)
 
 
 def test_the_record_says_it_cannot_rank() -> None:

@@ -39,7 +39,7 @@ The **per-family breakdown** of the 65 public regression scenarios is:
 | F1 — Matching-Engine Semantics (incl. MR) | A | 14 |
 | F2 — Agent-Mix / Market-Regime | B | 11 |
 | F3 — Latency Topology / Profile | A | 9 |
-| F4 — Oracle-Noise Robustness | B | 0 (sealed-only) |
+| F4 — Oracle-Noise Robustness | B | 0 |
 | F5 — Calibration / Stylized-Fact | B | 12 |
 | F6 — Throughput / Scale (single-scenario) | A | 6 |
 | F7 — Exchange-Protocol | A | 7 |
@@ -118,7 +118,7 @@ Tolerances are divided into two tiers. The tier assignment is fixed per family; 
 > | Tier-B statistical check | on Tier-B scenarios, *in addition to* Tier A | **instead of** Tier A |
 > | Stylized-fact ceilings | on **every** scenario | only on Family 5 |
 >
-> Both call the same functions in `../qfbench2_track_simulation/semantics.py`, so a metric never means two different things. What differs is which checks are applied where. A green run here is therefore a *superset* guarantee: it implies the official gate's semantic verdict. A red run here on a Tier-B scenario's fill sequence, or on a non-Family-5 scenario's stylized facts, is worth fixing but is not on its own an official failure.
+> Both call the same functions in `../qfbench2_track_simulation/semantics.py`, so a metric never means two different things. What differs is which checks are applied where. A green run here is necessary but not sufficient. This suite applies some checks more widely than the official gate and omits others entirely, so it does not imply the official verdict: in particular it never reads `message_trace.parquet`, so the message-ledger checks the official gate runs are not exercised here at all. A red run here on a Tier-B scenario's fill sequence, or on a non-Family-5 scenario's stylized facts, is worth fixing but is not on its own an official failure.
 
 ### Tier A — Structural Semantic Equality (Families 1, 3, 6, 7, 8)
 
@@ -134,7 +134,7 @@ A single deviation in any of these fields — a transposed fill, a missing fill,
 
 Two further Tier-A checks apply to **every** Tier-A family, not only Family 3:
 
-- **Exact event count.** The candidate must emit exactly as many rows as the reference. The scenario is deterministic given its seed, and the emitted row count is the ranked numerator, so a padded or truncated trace is refused here.
+- **Exact event count.** The candidate must emit exactly as many rows as the reference, and the emitted row count is the ranked numerator, so a padded or truncated trace is refused here. Determinism for one implementation and seed does not guarantee the reference trace. The baseline assigns separate random states in a fixed order; changing the seed or draw assignment can change stochastic message delivery. The checks inspect the emitted trace, not the RNG implementation. See the Tier-A note in the top-level `README.md`.
 - **Exact bidirectional event coverage, plus Kendall-tau ordering.** Events are keyed on `(order_id, msg_type, agent_id, side, price, size)` with per-key occurrence. Every reference event must appear in the candidate and every candidate event must appear in the reference — a missing event and an extra event are each a breach — and the Kendall-tau rank correlation of the two orderings, computed over the *whole* trace, must be >= 0.999 (`[scoring.params].kendall_tau_floor`).
 
 An earlier revision of this document presented Kendall-tau as a Family-3 extra. It is not: `semantics.check_tier_a` runs the same comparison for Families 1, 3, 6, 7 and 8.

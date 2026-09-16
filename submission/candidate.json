@@ -2,10 +2,9 @@
   "image": {
     "registry": "ghcr.io",
     "repository": "youxuanxue/track3-simulation-public",
-    "digest": "sha256:b7892677fb8c3446a3814ae24a141f2696c006130b6323807a4f34dc48e68d40"
+    "digest": "sha256:0e81b21be6cb194ab1231a45a278d5f7538d9abf1463f93b26dc5b36eebecb8e"
   },
   "license": "MIT",
-  "confirmed_c5_team_id": null,
-  "team_id_mapping_source": null,
-  "competition_url": null
+  "team_number": 23,
+  "phase": "dev"
 }

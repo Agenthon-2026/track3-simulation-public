@@ -22,7 +22,7 @@ from fast_sim.simulate import simulate
 
 def _run_one(args: tuple[str, str]) -> dict[str, Any]:
     sub_path, out_trace = args
-    ev = simulate(sub_path, out_trace)
+    ev = simulate(sub_path, out_trace, require_message_ledger=True)
     return {
         "sub": pathlib.Path(sub_path).stem,
         "n_events": int(ev["n_events"]),
