@@ -439,11 +439,15 @@ python throughput/timer.py \
     --runs 5
 ```
 
-Check that:
+For this local command, check that:
 - Run 1 (warm-up) is excluded from the median calculation.
-- The median of runs 2–5 is the throughput score for the baseline.
+- The median of runs 2–5 is the local throughput measurement for the baseline.
 - The baseline `events_per_sec` is consistent with `n_events ÷ wall_clock_sec` within
   ±5%.
+
+These are local timer defaults, not the current provisional Development service or the
+planned official Final protocol. Final repeat counts, warm-up treatment and runtime identity
+need their own published commitment; see [the timing profiles](../README.md#how-throughput-is-measured).
 
 ---
 
