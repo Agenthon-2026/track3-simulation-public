@@ -162,12 +162,13 @@ from qfbench2_common.verifier import HierarchicalVerifier, GateResult
 Install with:
 
 ```bash
-pip install "qfbench2-common[data] @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@v2.4.0#subdirectory=common"
+pip install "qfbench2-common[data] @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@v2.4.2#subdirectory=common"
 ```
 
-`v2.4.0` is the tag `QFBENCH2_COMMON_REF` in `.github/workflows/ci.yml` carries and the tag the
-scorer runs. Pin the tag rather than installing from a branch — an unpinned toolkit is how a local
-result and a scored result come to disagree without either side noticing.
+`v2.4.2` is the toolkit tag `QFBENCH2_COMMON_REF` in `.github/workflows/ci.yml` carries.
+It supplies the local scorer dependency and current submission commands. Pin the tag rather than
+installing from a branch — an unpinned toolkit is how a local result and a scored result come to
+disagree without either side noticing.
 
 ## Quick self-check before marking work done
 
