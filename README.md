@@ -158,6 +158,23 @@ breakdown.
 `events_per_sec` together, and a missing key fails the entire batch with
 `"non-numeric batch_events fields"` — a message that does not name the field it wanted.
 
+### Development resources
+
+The selected Development launcher applies a **4-CPU quota** and **16 GiB memory** per unit,
+with swap disabled. Cards request a GPU for permitted local code; using it is optional.
+Where the card supplies no timeout, the launcher uses a **1,800-second** container ceiling,
+including creation and an image pull when needed. The separate ingestion-stage clock is
+**43,200 seconds (12 hours)** across sequential units; scoring has its own stage clock.
+Simulation remains offline and receives no House allocation. The planned House timing release
+for other tracks changes neither these clocks nor Simulation's compute or network limits.
+
+See the [Development runtime guide](https://github.com/Agenthon-2026/Agenthon2026-public/blob/v2.4.2/docs/DEVELOPMENT-RUNTIME.md)
+for process, temporary-space and output limits. The card's `disk = "10G"` is not used by this
+launcher and does not establish a writable 10 GiB workspace. The provisional Development
+profile and shared queue do not certify official Final timing. Follow the
+[image submission guide](https://github.com/Agenthon-2026/Agenthon2026-public/blob/v2.4.2/docs/IMAGE-SUBMISSIONS.md)
+for public pulls or an organizer-confirmed private mirror.
+
 ### Firewall
 
 Your container runs with `--network none`. It may not make any outbound network requests
@@ -413,16 +430,14 @@ All scoring logic lives in the shared toolkit, which ships from its own public r
 Install it from there:
 
 ```bash
-# Pin the tag, and pin this one: v2.3.1 rejects a descriptor the evaluation verifier accepts
-# (it requires at least one `models` entry; the current contract allows `"models": []`).
-# `pip show qfbench2-common` reports 2.3.1 from this tag -- the metadata lags the tag. That is
-# cosmetic and expected; the code is the v2.4.0 code.
-pip install "qfbench2-common[data] @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@v2.4.0#subdirectory=common"
+# Pin toolkit v2.4.2 for the current submission commands and model-free fixture.
+# The installed package reports version 2.4.2.
+pip install "qfbench2-common[data] @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@v2.4.2#subdirectory=common"
 ```
 
 > ### Install the pinned tag, not a branch
 >
-> `Agenthon-2026/Agenthon2026-public` carries the `qfbench2-common` package, and `v2.4.0` is the
+> `Agenthon-2026/Agenthon2026-public` carries the `qfbench2-common` package, and `v2.4.2` is the
 > tag CI installs (`QFBENCH2_COMMON_REF` in `.github/workflows/ci.yml`) and the tag whose descriptor
 > contract matches what the scorer accepts. Do not pin `v2.3.1`: it refuses a descriptor the
 > verifier accepts, demanding a non-empty `models` where the current contract allows `"models": []`. **Pin a tag rather than installing from a branch** — an unpinned toolkit is how a local
@@ -445,7 +460,7 @@ baseline image. Run every step from this repository's root. The Docker build fet
 ABIDES source and applies all four required patches in order.
 
 ```bash
-pip install "qfbench2-common[data] @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@v2.4.0#subdirectory=common"
+pip install "qfbench2-common[data] @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@v2.4.2#subdirectory=common"
 docker build --platform=linux/amd64 -t track3-abides-baseline:latest baselines/
 ```
 
@@ -562,3 +577,15 @@ track3-simulation-public/
 There is no top-level `scoring/` package; an earlier revision of this tree showed one. The public
 scoring code is the `qfbench2_track_simulation/` package above, which is what
 `.github/workflows/ci.yml` lints, type-checks and tests.
+
+## Competition schedule and submission limits
+
+Development runs through **October 12, 2026**. The joint **Final + Verification phase runs
+October 13–25, 2026**. Each team makes **one final submission per track**; organizers perform
+verification within that same phase, with no separate participant Verification submission.
+Registration and Development close together on October 12, 2026 at **23:59 Anywhere on Earth (AoE, UTC−12)**. The joint Final + Verification phase closes on October 25, 2026 at **23:59 AoE**. Other competition dates and task/data cutoffs are unchanged.
+
+At the participant Development opening, Track 3 allows **5 uploads per team per day**
+and **20 total uploads per team for this track during Development**. Use your team's single
+designated CodaBench account. Local validation and packaging use no attempts; held or cancelled
+uploads still count. See [submission limits](SUBMISSION_CLI.md#development-submission-limits).
