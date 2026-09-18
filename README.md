@@ -168,11 +168,11 @@ including creation and an image pull when needed. The separate ingestion-stage c
 Simulation remains offline and receives no House allocation. The planned House timing release
 for other tracks changes neither these clocks nor Simulation's compute or network limits.
 
-See the [Development runtime guide](https://github.com/Agenthon-2026/Agenthon2026-public/blob/v2.4.2/docs/DEVELOPMENT-RUNTIME.md)
+See the [Development runtime guide](https://github.com/Agenthon-2026/Agenthon2026-public/blob/v2.4.3/docs/DEVELOPMENT-RUNTIME.md)
 for process, temporary-space and output limits. The card's `disk = "10G"` is not used by this
 launcher and does not establish a writable 10 GiB workspace. The provisional Development
 profile and shared queue do not certify official Final timing. Follow the
-[image submission guide](https://github.com/Agenthon-2026/Agenthon2026-public/blob/v2.4.2/docs/IMAGE-SUBMISSIONS.md)
+[image submission guide](https://github.com/Agenthon-2026/Agenthon2026-public/blob/v2.4.3/docs/IMAGE-SUBMISSIONS.md)
 for public pulls or an organizer-confirmed private mirror.
 
 ### Firewall
@@ -432,7 +432,7 @@ Install it from there:
 ```bash
 # Pin toolkit v2.4.2 for the current submission commands and model-free fixture.
 # The installed package reports version 2.4.2.
-pip install "qfbench2-common[data] @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@v2.4.2#subdirectory=common"
+pip install "qfbench2-common[data] @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@v2.4.3#subdirectory=common"
 ```
 
 > ### Install the pinned tag, not a branch
@@ -460,7 +460,7 @@ baseline image. Run every step from this repository's root. The Docker build fet
 ABIDES source and applies all four required patches in order.
 
 ```bash
-pip install "qfbench2-common[data] @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@v2.4.2#subdirectory=common"
+pip install "qfbench2-common[data] @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@v2.4.3#subdirectory=common"
 docker build --platform=linux/amd64 -t track3-abides-baseline:latest baselines/
 ```
 
