@@ -1,5 +1,14 @@
 # Track 3 — Throughput Metrics Layer (LOCAL DEVELOPER HARNESS — it cannot rank)
 
+## Executive summary (read this first)
+
+Use this directory for local measurements and diagnostics. The current provisional Development
+service also uses the developer scoring profile (`rankable = False`), with checked self-reported
+throughput on a shared worker queue. Its practice scores and standings are not official comparable
+timing. The production timing requirements below belong to the planned official Final path;
+its runtime identity, timing isolation, repeat/warm-up commitment and paired repeat
+producer/validator still need release validation. See [the timing profiles](../README.md#how-throughput-is-measured).
+
 > ## Nothing in this directory produces an official number
 >
 > **The Runner owns official participant launch, lifecycle, timing, C2 and C3.** Track 3 owns the
@@ -8,8 +17,8 @@
 > `rankable: false` and `profile: "developer"`, and the production scorer factory
 > (`qfbench2_track_simulation.scoring.build_verifier`) has **no path that reads it**.
 >
-> The ranked events/sec comes from the trusted C2 run record: host-measured wall clock,
-> Runner-measured parquet-footer row counts (frozen ruling R-3), telemetry at the frozen C7
+> For the planned official Final path, events/sec comes from the trusted C2 run record:
+> host-measured wall clock, Runner-measured parquet-footer row counts (frozen ruling R-3), telemetry at the frozen C7
 > thresholds (50 ms sampling, coverage >= 0.95, GPU resolved by UUID and attributed to the
 > participant cgroup), and every repeat validated. See
 > `qfbench2_track_simulation/telemetry.py`.
@@ -22,8 +31,8 @@
 > C3 no-follow **sanitizing** copy for retained output. The harness never re-invokes the
 > participant's image for housekeeping — the `_reclaim_output` helper that did is deleted.
 
-The **primary** Track-3 rank is raw `events_per_sec` aggregated over the complete C1 roster,
-descending, measured by the RUNNER on the official benchmark hardware (see
+The planned **official Final** Track-3 rank is raw `events_per_sec` aggregated over the
+complete C1 roster, descending, measured by the RUNNER on the official benchmark hardware (see
 `../baselines/README.md`). Everything in this directory is the **secondary metrics layer**
 (Phase 4/5): re-timing, diagnostics, the speed–realism frontier, the four special awards,
 and the SimProfile verifier. **None of it re-orders the primary `events/sec` leaderboard** —
@@ -227,14 +236,15 @@ not the median of a throughput-only subset. An admissible submission retains its
 rank when the informational `t3.throughput_nonimproving` label is present; see
 `../baselines/README.md` §3.
 
-### The ranked number's provenance
+### The planned official Final number's provenance
 
 For each official unit, `telemetry.ranked_timing` derives the median of the measured repeat
 rates from trusted C1/C2 evidence. It checks the committed repeat policy, measurement controls,
 and agreement with the scored output. `host_metrics.json` and the participant's `events.json`
 remain useful locally but cannot replace that evidence.
 
-There are two separately named factories:
+There are two separately named factories. The current Development service selects the developer
+factory explicitly; it does not make the production factory fall back to participant timing:
 
 | Factory | Score source | `rankable` | Used for official ranking |
 |---|---|---|---|

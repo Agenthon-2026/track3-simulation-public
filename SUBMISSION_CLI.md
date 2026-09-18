@@ -23,9 +23,37 @@ every unit — as `127` if the verb is not on `PATH`, as `126` if it is present 
 or as whatever your own argument parser exits with if it consumes and rejects it. All three are
 recorded as **your** failure, not an organizer fault, and score zero on that unit.
 
-The harness logs `sha256(image)` (anti-cheat), enforces
-`card.environment.{cpus,memory,gpu,timeout,network}`, and mounts only files whose `manifest.json`
-checksum matches. `LABEL qfbench2.interface_version="2.0"` is required on the image.
+The harness logs `sha256(image)` (anti-cheat), applies the card's CPU, memory, GPU and network
+settings, and mounts only files whose `manifest.json` checksum matches.
+`LABEL qfbench2.interface_version="2.0"` is required on the image.
+
+For Development, Coding and Explainability take the per-unit timeout from `[agent].timeout_sec`;
+Forecasting and Simulation use the launcher's 1,800-second fallback where no timeout is supplied.
+The unit clock includes container creation and an image pull when needed. The ingestion stage
+runs units sequentially within a separate 43,200-second (12-hour) platform clock; scoring has
+its own stage clock. Simulation remains offline and receives no House allocation. The planned
+House timing change for other tracks adds no Simulation compute or network access.
+See the [Development runtime guide](https://github.com/Agenthon-2026/Agenthon2026-public/blob/v2.4.3/docs/DEVELOPMENT-RUNTIME.md)
+for applied limits and pending access status. Development settings do not certify Final resources.
+
+Build a `linux/amd64` image identified by its immutable digest. Follow the
+[image submission guide](https://github.com/Agenthon-2026/Agenthon2026-public/blob/v2.4.3/docs/IMAGE-SUBMISSIONS.md)
+for anonymous public pulls and the organizer confirmation required before using a private mirror.
+A descriptor category or image-access field does not itself make a service available.
+
+## Development submission limits
+
+At the participant Development opening, **Track 3 allows 5 uploads per team per day**,
+with **20 total uploads per team for this track during Development**. Upload through your
+team's single designated CodaBench account. Held or cancelled uploads count even when they
+receive no score; local validation and packaging use no attempts. Track 1 has a 1-per-day limit;
+Tracks 2, 3 and 4 retain 5 per day.
+
+Development runs through **October 12, 2026**. The joint **Final + Verification phase runs
+October 13–25, 2026**. Each team makes **one final submission per track**; organizers perform
+verification within that same phase, with no separate participant Verification submission.
+Registration and Development close together on October 12, 2026 at **23:59 Anywhere on Earth (AoE, UTC−12)**. The joint Final + Verification phase closes on October 25, 2026 at **23:59 AoE**. Other competition dates and task/data cutoffs are unchanged.
+See the [Development submission limits](https://github.com/Agenthon-2026/Agenthon2026-public/blob/v2.4.3/docs/DEVELOPMENT-RUNTIME.md#submission-limits-at-the-development-opening).
 
 ## Network modes (per unit card, `[environment].network`)
 
@@ -35,7 +63,7 @@ internet** in official scoring.
 | Mode | Who | Meaning |
 |---|---|---|
 | `none` | **Simulation (T3)** | Fully offline (`--network=none`). Exactly the historical closed-resource behavior; any attempted outbound connection fails the run. |
-| `restricted` | **Agent tracks (T1 coding, T2 forecasting, T4 analysis)** | No open internet. Egress **only** through the organizer's audited proxy to the **organizer-hosted model endpoint** given by `MODEL_ENDPOINT` (open models, free to use, per-run budget). Every connection is logged (domain, bytes, timestamps); the log is the audit artifact for the verification phase. |
+| `restricted` | **Agent tracks (T1 coding, T2 forecasting, T4 Explainability)** | No open internet. Egress **only** through the organizer's audited proxy to the **organizer-hosted model endpoint** given by `MODEL_ENDPOINT` (open models, free to use, per-run budget). Every connection is logged (domain, bytes, timestamps); the log is the audit artifact for verification within the joint Final + Verification phase. |
 
 > ### ⚠️ Agent tracks: there is no third-party model-API access
 >
@@ -46,12 +74,10 @@ internet** in official scoring.
 > API **will be refused by the proxy**, and there is no route around it: the eval network is
 > `--internal`, so the proxy is the only path off the host.
 >
-> Your two supported options are therefore:
->
-> 1. **House endpoint** — call `MODEL_ENDPOINT` with `MODEL_NAME`. Free, metered per run.
-> 2. **Bring your own adapter** — ship one LoRA adapter, rank ≤ 64, for the organizer-served
->    base. Call the same endpoint with your supplied adapter model id. See
->    [adapter-only BYO](#adapter-only-byo); do not bundle full model weights or run a model server.
+> There is one model access on the agent tracks: the **House endpoint** — call
+> `$MODEL_ENDPOINT/v1/chat/completions` with `MODEL_NAME` and the `MODEL_TOKEN` bearer. Free,
+> metered per run. **Bring-your-own models and adapters are not part of this competition**
+> (ruling of 2026-09-18). Track 3 calls no model at all.
 >
 > **No participant API keys exist.** The harness injects none and there is no mechanism for a
 > submission to supply one, so a vendor key would have nothing to reach even if you had one.
@@ -75,11 +101,10 @@ recorded the wrong submission kind. Track 3 still requires its dedicated GPU que
 |---|---|---|---|---|
 | `simulator` | **3 (simulation)** | a market simulator image; the CUDA runtime and every dependency **vendored** | none — `network = "none"` | the dedicated Track 3 queue, one worker, GPU attached |
 | `api` | 1 / 2 / 4 | prompts / harness / system-prompts / agents (your contribution is the scaffolding) | the **house endpoint only**, via the proxy | the unit card's resource limits |
-| `byo-large` / `byo-small` | 1 / 2 / 4 | one LoRA adapter plus your agent code | the house endpoint serving the organizer's base with your adapter loaded | the unit card's resource limits |
 
-The `byo-*` descriptor values are legacy names, not separate small- and large-weights tiers.
-The adapter requirement applies to BYO model submissions on the agent tracks; Track 3 uses
-`simulator` and needs no adapter.
+Those are the only two values: the former `byo-small` / `byo-large` categories are invalid since
+toolkit 2.4.3 (bring-your-own models and adapters are not part of this competition), and an upload
+that still carries one is held by the organizer's intake and never run.
 
 Queue routing keys on the **track**, not on the string you write: the category records what kind of
 submission this is, and cannot be used to select a different box.
@@ -90,21 +115,13 @@ third example is how the generated wrapper and the documentation drifted apart i
 
 ### Adapter-only BYO
 
-This section applies to Tracks 1, 2 and 4. Track 3 remains offline and calls no model.
+Withdrawn. This section described a LoRA-adapter option for Tracks 1, 2 and 4; by the ruling of
+2026-09-18 bring-your-own models and adapters are not part of this competition, and the
+descriptor no longer accepts the `byo-*` categories. Track 3 remains offline and calls no model.
 
-A LoRA (low-rank adaptation) adapter contains parameter updates for the organizer's base model.
-Package exactly one `adapter_model.safetensors` and `adapter_config.json` pair together in your
-image. Use LoRA rank ≤ 64 and declare `target_modules` accurately. Full fine-tuning and shipping
-full model weights are not permitted. The directory for extraction is supplied with submission
-instructions; keep the pair in one relocatable directory rather than guessing a required path.
-
-The BYO contract assigns serving to the organizer: static extraction runs none of your code;
-the organizer starts the base with your adapter loaded and tears the server and extracted adapter
-down when the submission finishes. Your submission must not run a model server. Its client uses
-the supplied `MODEL_ENDPOINT` and `MODEL_NAME`; for BYO, `MODEL_NAME` identifies your adapter.
-These are the packaging and serving requirements, not a statement that a particular endpoint
-is currently available. See the [published BYO guide](https://github.com/Agenthon-2026/Agenthon2026-public/blob/09873cad2f3ea1171acd4e19cd8c10b3cb6a126f/starter-packs/track4/AGENTS.md#L401)
-for local adapter preparation.
+`gpu = true` on a task card grants a device for permitted local code. The `api` category denotes
+House access and does not remove that GPU grant. This does not authorize an additional model
+server.
 
 ### Container environment contract (`restricted` mode, set by the harness)
 
@@ -113,21 +130,20 @@ for local adapter preparation.
 | `HTTP_PROXY` / `HTTPS_PROXY` | the audited egress proxy. **Read these from the environment; never hardcode a proxy host** — the address is an operational detail and it has changed. Most HTTP clients honour them automatically |
 | `NO_PROXY` | hosts that must bypass the proxy |
 | `MODEL_ENDPOINT` | the organizer-hosted OpenAI-compatible endpoint. This is the **only** model API you can reach |
-| `MODEL_NAME` | the organizer-supplied model id for this run: the house model for `api`, or your adapter for BYO. Use it unchanged in client calls |
+| `MODEL_NAME` | the organizer-supplied model id for this run — the pinned House model. Use it unchanged in client calls |
 | `QFBENCH_NETWORK` | `restricted` (or `none` for simulation / local fallback) |
 
 ### Rules for model-API use (`restricted` mode)
 
 1. **Vendor-side tools OFF.** Web search, code execution, retrieval, and any other vendor-side
    tool MUST be disabled in every API call. Enforced by rule + audit of the proxy logs.
-2. **Pin model versions.** The house endpoint serves the organizer's pinned base; for a BYO
-   adapter, pin its exact revision too. Floating aliases (`*-latest`) are not reproducible
-   and are rejected at verification.
-3. **Disclose training cutoffs.** The training cutoff of every model used, including BYO adapters, MUST
-   be declared in submission metadata (`models[].training_cutoff` in `submission.json`).
-4. **Pin temperature/seed** where the API supports it. `api`-category entries are verified
-   *statistically* (bootstrap-CI overlap on organizer rerun for T2/T3/T4; for T1, the single-pass
-   per-unit verdicts must agree exactly); BYO entries bit-reproducibly.
+2. **Pin model versions.** The house endpoint serves the organizer's pinned base. Floating
+   aliases (`*-latest`) are not reproducible and are rejected at verification.
+3. **Disclose training cutoffs.** The training cutoff of every model used MUST be declared in
+   submission metadata (`models[].training_cutoff` in `submission.json`).
+4. **Pin temperature/seed** where the API supports it. Entries are verified *statistically*
+   (bootstrap-CI overlap on organizer rerun for T2/T3/T4; for T1, the single-pass per-unit
+   verdicts must agree exactly).
 5. **Track 3 stays offline.** Simulation uses `network = "none"` and makes no model-API
    calls. Model-using submissions follow the House API allocation in their own track's guide:
    [Track 1](https://github.com/Agenthon-2026/track1-coding-public/blob/main/SUBMISSION_CLI.md#rules-for-model-api-use-restricted-mode),
@@ -188,8 +204,8 @@ everything else to `simulate`. Six of the public dev units (`t3-gbatch-*`) are b
 2. Output must validate against the track output schema *before* any scoring (`g1_schema`).
 3. The image must not read any path outside `/input` and `/output`; the canary registry and held-out
    targets are never mounted.
-4. Determinism: the harness sets `QFBENCH_SEED`; verification phase reruns on fresh seeds/resamples and
-   compares against the final-phase result (reproducibility gate).
+4. Determinism: the harness sets `QFBENCH_SEED`; organizer verification within the joint Final + Verification phase
+   reruns on fresh seeds/resamples and compares against the final-submission result (reproducibility gate).
 5. Wall-clock and resource caps are per-track (`card.environment`); exceeding them is a `g2` failure.
 6. **T2 text cutoff (g2):** every document in `/input/text/` must have a timestamp field ≤ `--asof`.
    The harness checks text timestamps in addition to panel data timestamps. A document with a
@@ -218,6 +234,6 @@ everything else to `simulate`. Six of the public dev units (`t3-gbatch-*`) are b
 Do **not** add `house_endpoint_only` -- or any key the descriptor schema does not list -- to
 `submission.json`: the schema refuses unknown keys, so a submission carrying it is rejected
 before it runs. Whether every model call used the house endpoint exclusively is read from
-the audited egress-proxy logs during the verification phase; it drives an "Open Division"
+the audited egress-proxy logs during the joint Final + Verification phase; it drives an "Open Division"
 display filter of the single leaderboard (never a separate ranking) and needs nothing
 from you.
