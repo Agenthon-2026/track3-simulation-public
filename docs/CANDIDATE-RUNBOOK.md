@@ -10,7 +10,7 @@ Linux host that owns Docker so container memory and scratch use are measurable.
 Use Python 3.13 and the pinned toolkit:
 
 ```bash
-pip install 'qfbench2-common[data] @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@v2.4.1#subdirectory=common' scipy
+pip install 'qfbench2-common[data] @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@v2.4.3#subdirectory=common' scipy
 ```
 
 The root `Dockerfile` builds the complete participant. For a challenge, reuse its

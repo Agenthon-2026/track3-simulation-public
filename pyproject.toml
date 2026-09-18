@@ -15,7 +15,7 @@ requires-python = ">=3.13"
 # today, and both names are squattable -- a dependency-confusion exposure, not just an
 # inconvenience. Every install path that exists names the git source and a pin:
 #
-#     pip install "qfbench2-common @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@v2.3.1#subdirectory=common"
+#     pip install "qfbench2-common @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@v2.4.3#subdirectory=common"
 #
 # Registering the names, or committing to a private index, is an organization action and remains
 # open. The requirement is declared here so the absence is a named dependency problem rather than

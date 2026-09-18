@@ -35,11 +35,15 @@ English executive summary a finance student can follow.
 
 ## Hardware and resource contract (frozen at the 2026-08-10 compute-caps freeze)
 
-Every Track-3 timed run executes on the **same pinned, otherwise-idle, single-GPU instance** —
-pin the *instance*, not just the SKU — and submissions run strictly sequentially. Track 3 has
-its **own CodaBench queue with exactly one attached worker**; T1/T2/T4 share the
-`agenthon2026-v2` queue. Queue routing is the only way CodaBench can express a dedicated box.
-Both queues run GPU workers — the split is Track 3 timing isolation, not CPU vs GPU.
+The current **provisional Development** service uses a shared worker queue and the developer
+scoring profile (`rankable = False`). It provides practice feedback from checked self-reported
+throughput; it does not provide official comparable timing or a dedicated timing instance.
+
+The planned **official Final** timing contract requires the **same pinned, otherwise-idle,
+single-GPU instance** — pin the *instance*, not just the SKU — with submissions run strictly
+sequentially. A dedicated queue with one attached worker is the planned timing isolation.
+Runtime identity, repeat/warm-up policy and the paired repeat producer/validator remain Final
+release requirements. See [the timing profiles](README.md#how-throughput-is-measured).
 
 Per-unit container caps, identical in every Track-3 `card.toml` `[environment]` block:
 
@@ -104,9 +108,10 @@ non-rankable local developer harness. Two consequences bind every change here:
 1. **There are two named factories and only one of them ranks.**
    `qfbench2_track_simulation.scoring.build_verifier` is production: it requires the C1 plan and
    the C2 run record from `ctx`, and it has **no participant-rate fallback of any kind**.
-   `build_developer_verifier` is the local practice profile and stamps `rankable = False` on
-   everything it emits. Do not add a flag, an environment variable or a "strict mode" that turns
-   one into the other. The previous design had one factory with a fallback, and because the
+   `build_developer_verifier` is the local practice and provisional Development profile and
+   stamps `rankable = False` on everything it emits. Development's displayed practice standings
+   do not turn those results into official Final timing. Do not add a flag, an environment
+   variable or a "strict mode" that turns one into the other. The previous design had one factory with a fallback, and because the
    production ingestion path never wrote the handoff file, the fallback branch was taken on every
    unit — the leaderboard ranked numbers the submissions chose.
 2. **`throughput/` is the developer harness.** It writes `rankable: false`, it is bounded (hard
@@ -157,12 +162,14 @@ from qfbench2_common.verifier import HierarchicalVerifier, GateResult
 Install with:
 
 ```bash
-pip install "qfbench2-common[data] @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@v2.4.1#subdirectory=common"
+pip install "qfbench2-common[data] @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@v2.4.3#subdirectory=common"
 ```
 
-`v2.4.1` is the tag `QFBENCH2_COMMON_REF` in `.github/workflows/ci.yml` carries and the tag the
-scorer runs. Pin the tag rather than installing from a branch — an unpinned toolkit is how a local
-result and a scored result come to disagree without either side noticing.
+`v2.4.3` is the toolkit tag `QFBENCH2_COMMON_REF` in `.github/workflows/ci.yml` carries
+and the tag the scorer runs. It refuses the withdrawn `byo-*` categories (ruling 2026-09-18)
+and supplies the current submission commands. Pin the tag rather than installing from a
+branch — an unpinned toolkit is how a local result and a scored result come to disagree
+without either side noticing.
 
 ## Quick self-check before marking work done
 

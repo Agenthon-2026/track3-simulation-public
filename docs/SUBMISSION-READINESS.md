@@ -62,7 +62,9 @@ Final 使用对应 phase 重新封包，不能沿用 Dev descriptor 或 claim。
 的部署修复。stable/volatile 名单本身不证明生产修复已上线；不得伪造固定计时规避。
 新增付费资源及对外沟通须用户授权，PR 合并另待明确指令。
 
-规则入口：[Hub v2.4.1](https://github.com/Agenthon-2026/Agenthon2026-public/tree/v2.4.1)、
-[TEAM-CLAIM](https://github.com/Agenthon-2026/Agenthon2026-public/blob/v2.4.1/starter-packs/track3/TEAM-CLAIM.md)、
+规则入口：[Hub v2.4.3](https://github.com/Agenthon-2026/Agenthon2026-public/tree/v2.4.3)、
+[TEAM-CLAIM](https://github.com/Agenthon-2026/Agenthon2026-public/blob/v2.4.3/starter-packs/track3/TEAM-CLAIM.md)、
 [Track 3 容量与排名答复](https://github.com/Agenthon-2026/track3-simulation-public/issues/1#issuecomment-5534948011)、
-[官方赛期](https://www.agenthon.net/rules/)。动态公告在提交前复核，不把旧网页观察当作当前状态。
+[官方赛期](https://www.agenthon.net/rules/)。Development 至 2026-10-12 AoE；Final+Verification 为
+10-13–10-25。BYO 已出局（裁决 2026-09-18）；`category` 必须为 `simulator`。动态公告在提交前复核，
+不把旧网页观察当作当前状态。
