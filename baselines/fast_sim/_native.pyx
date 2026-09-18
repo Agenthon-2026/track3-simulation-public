@@ -727,30 +727,21 @@ cdef class CTrace:
         import numpy as np
 
         cdef Py_ssize_t i, n_order, n_quote, n, j
-        cdef int ev
-        cdef int[:] event_codes
-        cdef unsigned char[:] side_codes
-        cdef object[:] message_labels, side_labels
         n_order = self.n_o
         n_quote = self.n_q
         if n_order == 0 and n_quote == 0:
             return None
         if n_order:
-            t_arr = np.empty(n_order, dtype=np.int64)
-            aid_arr = np.empty(n_order, dtype=np.int64)
-            oid_arr = np.empty(n_order, dtype=np.int64)
-            px_arr = np.empty(n_order, dtype=np.int64)
-            sz_arr = np.empty(n_order, dtype=np.int64)
-            ev_arr = np.empty(n_order, dtype=np.int32)
-            side_b = np.empty(n_order, dtype=np.uint8)
-            for i in range(n_order):
-                t_arr[i] = self.ot[i]
-                aid_arr[i] = self.oaid[i]
-                oid_arr[i] = self.ooid[i]
-                px_arr[i] = self.opx[i]
-                sz_arr[i] = self.osz[i]
-                ev_arr[i] = self.oev[i]
-                side_b[i] = self.oside[i]
+            # Zero-copy views over the malloc'd scratch buffers, then narrow
+            # int32 -> int64 for price/size via astype. The old per-row Python
+            # loop was the dominant streaming cost on the throughput exemplar.
+            t_arr = np.asarray(<long long[:n_order]>self.ot)
+            aid_arr = np.asarray(<int[:n_order]>self.oaid)
+            oid_arr = np.asarray(<long long[:n_order]>self.ooid)
+            px_arr = np.asarray(<int[:n_order]>self.opx).astype(np.int64)
+            sz_arr = np.asarray(<int[:n_order]>self.osz).astype(np.int64)
+            ev_arr = np.asarray(<int[:n_order]>self.oev)
+            side_b = np.asarray(<unsigned char[:n_order]>self.oside)
             order_idx = np.argsort(t_arr, kind="stable")
             t_arr = t_arr[order_idx]
             aid_arr = aid_arr[order_idx]
@@ -759,93 +750,85 @@ cdef class CTrace:
             sz_arr = sz_arr[order_idx]
             ev_arr = ev_arr[order_idx]
             side_b = side_b[order_idx]
-            last_exec = {}
-            for pos in np.nonzero(ev_arr == EV_EXEC)[0]:
-                last_exec[int(oid_arr[pos])] = int(pos)
-            msg = np.empty(n_order, dtype=object)
-            side_str = np.empty(n_order, dtype=object)
-            # Typed views avoid a Python ndarray index and integer conversion for
-            # every row. Output labels, final-fill lookup and row order are unchanged.
-            event_codes = ev_arr
-            side_codes = side_b
-            message_labels = msg
-            side_labels = side_str
-            for i in range(n_order):
-                ev = event_codes[i]
-                if ev == EV_EXEC:
-                    message_labels[i] = "ORDER_FILLED" if last_exec.get(int(oid_arr[i])) == i else "PARTIAL_FILL"
-                elif ev == EV_SUBMIT:
-                    message_labels[i] = "ORDER_SUBMITTED"
-                elif ev == EV_ACCEPT:
-                    message_labels[i] = "ORDER_ACCEPTED"
-                elif ev == EV_CANCEL:
-                    message_labels[i] = "ORDER_CANCELLED"
-                elif ev == EV_PARTIAL:
-                    message_labels[i] = "PARTIAL_FILL"
-                elif ev == EV_FILLED:
-                    message_labels[i] = "ORDER_FILLED"
-                else:
-                    message_labels[i] = "ORDER_REPLACED"
-                side_labels[i] = "BID" if side_codes[i] else "ASK"
+            msg_code = np.full(n_order, 5, dtype=np.int8)  # ORDER_REPLACED
+            msg_code[ev_arr == EV_SUBMIT] = 0              # ORDER_SUBMITTED
+            msg_code[ev_arr == EV_ACCEPT] = 1              # ORDER_ACCEPTED
+            msg_code[ev_arr == EV_CANCEL] = 2              # ORDER_CANCELLED
+            msg_code[ev_arr == EV_PARTIAL] = 3             # PARTIAL_FILL
+            msg_code[ev_arr == EV_FILLED] = 4              # ORDER_FILLED
+            exec_mask = ev_arr == EV_EXEC
+            if exec_mask.any():
+                # Last-execution classification matches the Python dict exactly:
+                # an exec is ORDER_FILLED iff it is the final exec position for its
+                # order_id in this chunk (mode-2 replays already carry EV_PARTIAL /
+                # EV_FILLED, so this branch only fires on the in-memory path).
+                exec_pos = np.nonzero(exec_mask)[0]
+                rev_pos = exec_pos[::-1]
+                _, first_in_rev = np.unique(oid_arr[rev_pos], return_index=True)
+                final = np.zeros(n_order, dtype=bool)
+                final[rev_pos[first_in_rev]] = True
+                msg_code[exec_mask] = np.where(
+                    final[exec_mask], 4, 3
+                )
+            side_code = side_b.astype(np.int8)  # 1=BID, 0=ASK
         else:
-            t_arr = aid_arr = oid_arr = px_arr = sz_arr = msg = side_str = None
+            t_arr = aid_arr = oid_arr = px_arr = sz_arr = msg_code = side_code = None
         if n_quote:
-            last_i = {}
-            first_rank = {}
-            rank = 0
-            for i in range(n_quote):
-                key = (self.qt[i], self.qside[i])
-                if key not in first_rank:
-                    first_rank[key] = rank
-                    rank += 1
-                last_i[key] = i
-            kept = sorted(last_i.items(), key=lambda kv: first_rank[kv[0]])
-            n_quote = len(kept)
-            q_t = np.empty(n_quote, dtype=np.int64)
-            q_aid = np.empty(n_quote, dtype=np.int64)
-            q_side = np.empty(n_quote, dtype=object)
-            q_px = np.empty(n_quote, dtype=np.int64)
-            q_sz = np.empty(n_quote, dtype=np.int64)
-            q_msg = np.empty(n_quote, dtype=object)
-            for j, (_, i) in enumerate(kept):
-                q_t[j] = self.qt[i]
-                q_aid[j] = self.qaid[i]
-                q_side[j] = "BID" if self.qside[i] else "ASK"
-                q_px[j] = self.qpx[i]
-                q_sz[j] = self.qsz[i]
-                q_msg[j] = "QUOTE_UPDATE"
+            qt_arr = np.asarray(<long long[:n_quote]>self.qt)
+            qaid_arr = np.asarray(<int[:n_quote]>self.qaid)
+            qside_b = np.asarray(<unsigned char[:n_quote]>self.qside)
+            qpx_arr = np.asarray(<int[:n_quote]>self.qpx).astype(np.int64)
+            qsz_arr = np.asarray(<int[:n_quote]>self.qsz).astype(np.int64)
+            # Keep the final quote per (t_ns, side), ordered by each key's first
+            # appearance -- the exact rule the Python dict loop applied, vectorized.
+            keys = qt_arr * 2 + qside_b.astype(np.int64)
+            uniq, first_idx = np.unique(keys, return_index=True)
+            order = np.argsort(first_idx, kind="stable")
+            uniq_ordered = uniq[order]
+            sort_k = np.argsort(keys, kind="stable")
+            boundaries = np.searchsorted(
+                keys[sort_k], uniq_ordered, side="right"
+            )
+            last_idx = sort_k[boundaries - 1]
+            n_quote = len(last_idx)
+            q_t = qt_arr[last_idx]
+            q_aid = qaid_arr[last_idx]
+            q_side_code = qside_b[last_idx].astype(np.int8)  # 1=BID, 0=ASK
+            q_px = qpx_arr[last_idx]
+            q_sz = qsz_arr[last_idx]
+            q_msg_code = np.full(n_quote, 6, dtype=np.int8)  # QUOTE_UPDATE
         else:
             n_quote = 0
         n = n_order + n_quote
         t_all = np.empty(n, dtype=np.int64)
-        aid_all = np.empty(n, dtype=np.int64)
-        msg_all = np.empty(n, dtype=object)
-        side_all = np.empty(n, dtype=object)
+        aid_all = np.empty(n, dtype=np.int32)
+        msg_code_all = np.empty(n, dtype=np.int8)
+        side_code_all = np.empty(n, dtype=np.int8)
         px_all = np.empty(n, dtype=np.int64)
         sz_all = np.empty(n, dtype=np.int64)
         oid_all = np.empty(n, dtype=np.int64)
         if n_order:
             t_all[:n_order] = t_arr
             aid_all[:n_order] = aid_arr
-            msg_all[:n_order] = msg
-            side_all[:n_order] = side_str
+            msg_code_all[:n_order] = msg_code
+            side_code_all[:n_order] = side_code
             px_all[:n_order] = px_arr
             sz_all[:n_order] = sz_arr
             oid_all[:n_order] = oid_arr
         if n_quote:
             t_all[n_order:] = q_t
             aid_all[n_order:] = q_aid
-            msg_all[n_order:] = q_msg
-            side_all[n_order:] = q_side
+            msg_code_all[n_order:] = q_msg_code
+            side_code_all[n_order:] = q_side_code
             px_all[n_order:] = q_px
             sz_all[n_order:] = q_sz
             oid_all[n_order:] = -1
         idx = _stable_lexsort(t_all, oid_all)
         return {
             "t_ns": t_all[idx],
-            "agent_id": aid_all[idx].astype(np.int32, copy=False),
-            "msg_type": msg_all[idx],
-            "side": side_all[idx],
+            "agent_id": aid_all[idx],
+            "msg_code": msg_code_all[idx],
+            "side_code": side_code_all[idx],
             "price": px_all[idx],
             "size": sz_all[idx],
             "order_id": oid_all[idx],
@@ -853,6 +836,7 @@ cdef class CTrace:
 
     def to_arrow(self):
         import pyarrow as pa
+        from pyarrow import compute as pc
         a = self.to_arrays()
         if a is None:
             return pa.table({
@@ -864,11 +848,24 @@ cdef class CTrace:
                 "size": pa.array([], type=pa.int64()),
                 "order_id": pa.array([], type=pa.int64()),
             })
+        # Six message types and two sides: gather from prebuilt string arrays
+        # instead of converting numpy object arrays element by element (that path
+        # dominated the streaming wall clock on the throughput-scale exemplar).
+        msg_values = pa.array(
+            ["ORDER_SUBMITTED", "ORDER_ACCEPTED", "ORDER_CANCELLED",
+             "PARTIAL_FILL", "ORDER_FILLED", "ORDER_REPLACED", "QUOTE_UPDATE"],
+            type=pa.string(),
+        )
+        side_values = pa.array(["ASK", "BID"], type=pa.string())
         return pa.table({
             "t_ns": a["t_ns"],
             "agent_id": a["agent_id"],
-            "msg_type": pa.array(a["msg_type"], type=pa.string()),
-            "side": pa.array(a["side"], type=pa.string()),
+            "msg_type": pc.take(
+                msg_values, pa.array(a["msg_code"], type=pa.int8())
+            ),
+            "side": pc.take(
+                side_values, pa.array(a["side_code"], type=pa.int8())
+            ),
             "price": a["price"],
             "size": a["size"],
             "order_id": a["order_id"],
@@ -877,15 +874,35 @@ cdef class CTrace:
     def to_dataframe(self):
         from fast_sim.extract import _empty_trace
         from abides_fork.trace import _TRACE_DTYPES
+        import numpy as np
         import pandas as pd
         a = self.to_arrays()
         if a is None:
             return _empty_trace()
-        return pd.DataFrame(a).astype(_TRACE_DTYPES, copy=False)
+        msg = np.take(
+            np.array(
+                ["ORDER_SUBMITTED", "ORDER_ACCEPTED", "ORDER_CANCELLED",
+                 "PARTIAL_FILL", "ORDER_FILLED", "ORDER_REPLACED", "QUOTE_UPDATE"],
+                dtype=object,
+            ),
+            a["msg_code"],
+        )
+        side = np.take(np.array(["ASK", "BID"], dtype=object), a["side_code"])
+        frame = pd.DataFrame({
+            "t_ns": a["t_ns"],
+            "agent_id": a["agent_id"],
+            "msg_type": msg,
+            "side": side,
+            "price": a["price"],
+            "size": a["size"],
+            "order_id": a["order_id"],
+        })
+        return frame.astype(_TRACE_DTYPES, copy=False)
 
 
 cdef class CLedger:
     cdef int mode
+    cdef long long count
     cdef object sink
     cdef Py_ssize_t chunk_rows
     cdef LRow *rows
@@ -893,6 +910,7 @@ cdef class CLedger:
 
     def __cinit__(self):
         self.mode = 0
+        self.count = 0
         self.sink = None
         self.chunk_rows = 262144
         self.rows = NULL
@@ -916,6 +934,9 @@ cdef class CLedger:
         unsigned char flags,
     ) except -1:
         if self.mode == 1:
+            return 0
+        if self.mode == 3:
+            self.count += 1
             return 0
         if self.mode == 2 and self.n >= self.chunk_rows:
             self.flush()
@@ -1328,6 +1349,8 @@ cdef class NativeSim:
             flags |= LF_PARENT_NA
         if self.ledger.mode == 2:
             self.pending[(mid, rid)] = (mid, sid, rid, sent, deliver, lat, mtype, oid, self.causal, flags)
+        elif self.ledger.mode == 3:
+            self.pending[(mid, rid)] = True
         else:
             idx = self.ledger.append_c(
                 mid, sid, rid, sent, deliver, lat, mtype, oid, self.causal, -1, flags,
@@ -1357,6 +1380,8 @@ cdef class NativeSim:
             flags |= LF_PARENT_NA
         if self.ledger.mode == 2:
             self.pending[(mid, rid)] = (mid, sid, rid, sent, deliver, lat, mtype, oid, self.causal, flags)
+        elif self.ledger.mode == 3:
+            self.pending[(mid, rid)] = True
         else:
             idx = self.ledger.append_c(
                 mid, sid, rid, sent, deliver, lat, mtype, oid, self.causal, -1, flags,
@@ -1790,6 +1815,8 @@ cdef class NativeSim:
         if idx is not None:
             if self.ledger.mode == 2:
                 self.ledger.append_c(idx[0], idx[1], idx[2], idx[3], idx[4], idx[5], idx[6], idx[7], idx[8], self.seq, idx[9])
+            elif self.ledger.mode == 3:
+                self.ledger.count += 1
             else:
                 self.ledger.rows[<Py_ssize_t>idx].seq = self.seq
         self.seq += 1
@@ -1955,8 +1982,11 @@ def stream_native_sim(spec, partial, expected_executions, trace_sink, ledger_sin
     """Replay exactly, flushing only at timestamp boundaries for trace ordering."""
     if chunk_rows < 1:
         raise ValueError("chunk_rows must be positive")
+    from fast_sim.streaming import UnstoredLedger
     cdef NativeSim sim = NativeSim()
-    sim.trace.mode = sim.ledger.mode = 2
+    cdef bint ledger_count_only = isinstance(ledger_sink, UnstoredLedger)
+    sim.trace.mode = 2
+    sim.ledger.mode = 3 if ledger_count_only else 2
     sim.trace.partial = partial
     sim.trace.sink = trace_sink
     sim.ledger.sink = ledger_sink
@@ -1967,6 +1997,8 @@ def stream_native_sim(spec, partial, expected_executions, trace_sink, ledger_sin
         raise ValueError("execution replay disagrees with classification pass")
     sim.trace.flush()
     sim.ledger.flush()
+    if ledger_count_only:
+        ledger_sink.num_rows = sim.ledger.count
 
 
 cdef class NativeOracle:

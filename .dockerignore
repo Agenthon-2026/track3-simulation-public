@@ -15,3 +15,6 @@ qfbench2_track_simulation
 templates
 canary_registry.json
 .github
+
+# Local run artifacts (can be tens of GB after roster/exemplar runs)
+out

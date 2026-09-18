@@ -43,17 +43,21 @@ class ParquetSink:
             empty = pa.Table.from_pandas(as_pandas(empty), preserve_index=False)
         self.schema = empty.schema
         strings = [f.name for f in self.schema if pa.types.is_string(f.type)]
+        # Small-cardinality integer columns (agent ids, order sizes) compress far
+        # better as dictionaries than as DELTA_BINARY_PACKED varint streams; the
+        # high-cardinality timestamps / prices / order ids keep delta encoding.
+        dict_ints = {"agent_id", "size"}
         integers = {
             f.name: "DELTA_BINARY_PACKED"
             for f in self.schema
-            if pa.types.is_integer(f.type)
+            if pa.types.is_integer(f.type) and f.name not in dict_ints
         }
         self.writer = pq.ParquetWriter(
             self.path,
             self.schema,
             compression="zstd",
             compression_level=3,
-            use_dictionary=strings,
+            use_dictionary=strings + sorted(dict_ints),
             column_encoding=integers,
         )
 
