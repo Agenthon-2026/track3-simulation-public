@@ -194,6 +194,79 @@ class NativeStreamingTests(unittest.TestCase):
             simulate(config, root / "unknown/trace.parquet")
             self.assertTrue((root / "unknown/message_trace.parquet").exists())
 
+    def test_optional_ledger_counts_only_deliveries_across_stop_time(self):
+        scenario = json.loads(
+            (ROOT / "units/t3-mp01-stp-newest-baseline/scenario.json").read_text()
+        )
+        scenario["horizon_ns"] = 3_000_000_000
+        # Latency exceeds the one-second post-close drain window. Exchange
+        # computation also forces busy-recipient rescheduling of queued messages.
+        scenario["latency_config"] = {
+            "model": "uniform",
+            "params": {"min_ns": 0, "max_ns": 2_000_000_000},
+        }
+        scenario["exchange_config"]["compute_delay_ns"] = 10_000_000
+        for agent in scenario["agent_configs"]:
+            agent["params"]["rebalance_interval_ns"] = 100_000_000
+
+        for seed in (91571, 91572, 91573):
+            with self.subTest(seed=seed), tempfile.TemporaryDirectory() as directory:
+                scenario["seed"] = seed
+                spec = spec_for(scenario)
+                root = Path(directory)
+                full = stream_native(
+                    deepcopy(spec),
+                    (root / "full/trace.parquet", root / "full/message_trace.parquet"),
+                    chunk_rows=37,
+                )
+                lean = stream_native(
+                    deepcopy(spec), (root / "lean/trace.parquet", None), chunk_rows=37
+                )
+                ledger = pd.read_parquet(root / "full/message_trace.parquet")
+                self.assertGreater(full[0].num_rows, 0)
+                self.assertEqual(full[1].num_rows, len(ledger))
+                self.assertEqual(lean[1].num_rows, len(ledger))
+                self.assertEqual(lean[0].num_rows, full[0].num_rows)
+                self.assertTrue(
+                    pq.read_table(root / "lean/trace.parquet").equals(
+                        pq.read_table(root / "full/trace.parquet"), check_metadata=False
+                    )
+                )
+                self.assertFalse((root / "lean/message_trace.parquet").exists())
+
+                # Nominal receive times invert only after a busy recipient's
+                # event is requeued; mode 3 must count its eventual delivery once.
+                self.assertTrue((ledger.t_recv_ns.diff() < 0).any())
+                self.assertFalse(ledger.duplicated(["message_id", "dst_id"]).any())
+                broadcast = ledger[ledger.msg_type == "MarketClosePriceMsg"]
+                self.assertGreater(broadcast.dst_id.nunique(), 1)
+                self.assertEqual(broadcast.message_id.nunique(), 1)
+
+                # Extend only the drain window to reveal messages already sent
+                # by delivered parents but still pending when the short run ends.
+                extended = deepcopy(spec)
+                extended["stop_time"] += 4_000_000_000
+                _, extended_messages = run_native_sim(extended)
+                drained = as_pandas(extended_messages)
+                pd.testing.assert_frame_equal(
+                    ledger, drained.iloc[: len(ledger)].reset_index(drop=True)
+                )
+                delivered_keys = set(zip(ledger.message_id, ledger.dst_id))
+                pending = drained[
+                    (drained.t_send_ns <= spec["stop_time"])
+                    & (drained.t_recv_ns > spec["stop_time"])
+                    & drained.causal_parent.isin(ledger.message_id)
+                ]
+                pending = pending[
+                    [
+                        key not in delivered_keys
+                        for key in zip(pending.message_id, pending.dst_id)
+                    ]
+                ]
+                self.assertGreater(len(pending), 0)
+                self.assertTrue((pending.msg_type == "MarketClosePriceMsg").any())
+                self.assertLess(lean[1].num_rows, len(drained))
+
     def test_replay_count_mismatch_is_an_error(self):
         scenario = json.loads(
             (ROOT / "units/t3-s001-price-time-priority/scenario.json").read_text()

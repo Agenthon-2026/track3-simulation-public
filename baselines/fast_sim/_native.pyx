@@ -773,14 +773,11 @@ cdef class CTrace:
             sz_arr = np.asarray(<int[:n_order]>self.osz).astype(np.int64)
             ev_arr = np.asarray(<int[:n_order]>self.oev)
             side_b = np.asarray(<unsigned char[:n_order]>self.oside)
-            order_idx = np.argsort(t_arr, kind="stable")
-            t_arr = t_arr[order_idx]
-            aid_arr = aid_arr[order_idx]
-            oid_arr = oid_arr[order_idx]
-            px_arr = px_arr[order_idx]
-            sz_arr = sz_arr[order_idx]
-            ev_arr = ev_arr[order_idx]
-            side_b = side_b[order_idx]
+            # NativeSim delivers events in nondecreasing ``self.now`` order;
+            # streaming flushes only at timestamp boundaries, so each chunk
+            # is already time ordered.  The final lexsort below supplies the
+            # required (t_ns, order_id) tie break. Skip the redundant timestamp
+            # sort and its seven column gathers without changing row order.
             msg_code = np.full(n_order, 5, dtype=np.int8)  # ORDER_REPLACED
             msg_code[ev_arr == EV_SUBMIT] = 0              # ORDER_SUBMITTED
             msg_code[ev_arr == EV_ACCEPT] = 1              # ORDER_ACCEPTED
@@ -1368,7 +1365,11 @@ cdef class NativeSim:
         if self.ledger.mode == 2:
             self.pending[(mid, rid)] = (mid, sid, rid, sent, deliver, lat, mtype, oid, self.causal, flags)
         elif self.ledger.mode == 3:
-            self.pending[(mid, rid)] = True
+            # Count-only ledgers do not need a pending row: the count is
+            # advanced when the event is actually delivered in _deliver_seq.
+            # Avoiding one dict insertion and one pop per message is material
+            # on the optional-ledger throughput benchmark.
+            return
         else:
             idx = self.ledger.append_c(
                 mid, sid, rid, sent, deliver, lat, mtype, oid, self.causal, -1, flags,
@@ -1399,7 +1400,8 @@ cdef class NativeSim:
         if self.ledger.mode == 2:
             self.pending[(mid, rid)] = (mid, sid, rid, sent, deliver, lat, mtype, oid, self.causal, flags)
         elif self.ledger.mode == 3:
-            self.pending[(mid, rid)] = True
+            # See _enq: count-only mode has no pending rows to retain.
+            return
         else:
             idx = self.ledger.append_c(
                 mid, sid, rid, sent, deliver, lat, mtype, oid, self.causal, -1, flags,
@@ -1828,13 +1830,21 @@ cdef class NativeSim:
             a.mkt_closed = 1
 
     cdef void _deliver_seq(self, long long mid, int rid) except *:
+        if self.ledger.mode == 1:
+            # Classification intentionally emits no ledger rows.  The first
+            # pass used to probe an always-empty pending dict for every
+            # delivery; advancing the sequence is all that remains.
+            self.seq += 1
+            return
+        if self.ledger.mode == 3:
+            self.ledger.count += 1
+            self.seq += 1
+            return
         cdef object key = (mid, rid)
         cdef object idx = self.pending.pop(key, None)
         if idx is not None:
             if self.ledger.mode == 2:
                 self.ledger.append_c(idx[0], idx[1], idx[2], idx[3], idx[4], idx[5], idx[6], idx[7], idx[8], self.seq, idx[9])
-            elif self.ledger.mode == 3:
-                self.ledger.count += 1
             else:
                 self.ledger.rows[<Py_ssize_t>idx].seq = self.seq
         self.seq += 1
