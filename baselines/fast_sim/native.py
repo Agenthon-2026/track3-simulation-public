@@ -258,10 +258,12 @@ def write_parquet(obj: Any, path: Any) -> None:
     obj.to_parquet(path, compression="snappy", index=False)
 
 
-def run_native(config: dict[str, Any], output_paths=None) -> tuple[Any, Any, dict[str, Any]]:
+def run_native_from_spec(
+    spec: dict[str, Any], output_paths=None, *, agents: Any = None
+) -> tuple[Any, Any, dict[str, Any]]:
+    """Run from a pre-built native spec (light boot or ``snapshot_native``)."""
     from fast_sim._native import run_native_sim
 
-    spec = snapshot_native(config)
     # Dispatch by workload parameters, never public scenario IDs. This estimate
     # chooses storage only; it does not change the scenario or its event count.
     placements = sum(
@@ -274,18 +276,27 @@ def run_native(config: dict[str, Any], output_paths=None) -> tuple[Any, Any, dic
         trace, msg = stream_native(spec, output_paths)
     else:
         trace, msg = run_native_sim(spec)
-    return trace, msg, {"col_trace": None, "col_ledger": None, "agents": config["agents"]}
+    return trace, msg, {"col_trace": None, "col_ledger": None, "agents": agents or []}
 
 
-def stream_native(spec, output_paths, chunk_rows=262144):
-    """Classify final executions, then replay into bounded Parquet row groups."""
-    from copy import deepcopy
+def run_native(config: dict[str, Any], output_paths=None) -> tuple[Any, Any, dict[str, Any]]:
+    return run_native_from_spec(
+        snapshot_native(config), output_paths, agents=config["agents"]
+    )
+
+
+def stream_native(spec, output_paths, chunk_rows=524288):
+    """Classify final executions, then replay into bounded Parquet row groups.
+
+    Classification binds MT19937 copies from the Python RandomStates and does not
+    advance them, so the replay pass can reuse ``spec`` without ``deepcopy``.
+    """
     from fast_sim._native import (
         CTrace, CLedger, classify_native_executions, stream_native_sim,
     )
     from fast_sim.streaming import ParquetSink, UnstoredLedger
 
-    partial, executions = classify_native_executions(deepcopy(spec))
+    partial, executions = classify_native_executions(spec)
     trace = ParquetSink(output_paths[0], CTrace().to_arrow())
     try:
         ledger = (

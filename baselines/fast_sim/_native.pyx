@@ -610,6 +610,10 @@ cdef class CTrace:
     cdef int *qpx
     cdef int *qsz
     cdef Py_ssize_t n_q, cap_q
+    # At most one live BBO bid/ask row per timestamp: overwrite in place instead
+    # of appending then uniquing in to_arrays (QUOTE_UPDATE is ~40% of exemplar rows).
+    cdef long long q_coalesce_t
+    cdef Py_ssize_t q_bid_i, q_ask_i
 
     def __cinit__(self):
         self.mode = 0
@@ -624,6 +628,9 @@ cdef class CTrace:
         self.qt = self.qaid = self.qpx = self.qsz = NULL
         self.qside = NULL
         self.n_o = self.cap_o = self.n_q = self.cap_q = 0
+        self.q_coalesce_t = -1
+        self.q_bid_i = -1
+        self.q_ask_i = -1
 
     def __dealloc__(self):
         if self.ot != NULL:
@@ -705,22 +712,46 @@ cdef class CTrace:
         self.n_o = i + 1
 
     cdef void add_quote_c(self, long long t, unsigned char is_bid, int px, int sz, int aid) except *:
+        cdef Py_ssize_t i
         if self.mode == 1:
+            return
+        if t != self.q_coalesce_t:
+            self.q_coalesce_t = t
+            self.q_bid_i = -1
+            self.q_ask_i = -1
+        elif is_bid and self.q_bid_i >= 0:
+            i = self.q_bid_i
+            self.qpx[i] = px
+            self.qsz[i] = sz
+            self.qaid[i] = aid
+            return
+        elif (not is_bid) and self.q_ask_i >= 0:
+            i = self.q_ask_i
+            self.qpx[i] = px
+            self.qsz[i] = sz
+            self.qaid[i] = aid
             return
         if self.n_q >= self.cap_q:
             self._grow_q()
-        cdef Py_ssize_t i = self.n_q
+        i = self.n_q
         self.qt[i] = t
         self.qaid[i] = aid
         self.qside[i] = is_bid
         self.qpx[i] = px
         self.qsz[i] = sz
         self.n_q = i + 1
+        if is_bid:
+            self.q_bid_i = i
+        else:
+            self.q_ask_i = i
 
     cdef void flush(self) except *:
         if self.sink is not None and (self.n_o or self.n_q):
             self.sink.write(self.to_arrow())
             self.n_o = self.n_q = 0
+            self.q_coalesce_t = -1
+            self.q_bid_i = -1
+            self.q_ask_i = -1
 
     def to_arrays(self):
         from fast_sim.extract import _stable_lexsort
@@ -774,28 +805,15 @@ cdef class CTrace:
         else:
             t_arr = aid_arr = oid_arr = px_arr = sz_arr = msg_code = side_code = None
         if n_quote:
+            # add_quote_c coalesces to one row per (t_ns, side), so no uniquing step.
             qt_arr = np.asarray(<long long[:n_quote]>self.qt)
             qaid_arr = np.asarray(<int[:n_quote]>self.qaid)
             qside_b = np.asarray(<unsigned char[:n_quote]>self.qside)
-            qpx_arr = np.asarray(<int[:n_quote]>self.qpx).astype(np.int64)
-            qsz_arr = np.asarray(<int[:n_quote]>self.qsz).astype(np.int64)
-            # Keep the final quote per (t_ns, side), ordered by each key's first
-            # appearance -- the exact rule the Python dict loop applied, vectorized.
-            keys = qt_arr * 2 + qside_b.astype(np.int64)
-            uniq, first_idx = np.unique(keys, return_index=True)
-            order = np.argsort(first_idx, kind="stable")
-            uniq_ordered = uniq[order]
-            sort_k = np.argsort(keys, kind="stable")
-            boundaries = np.searchsorted(
-                keys[sort_k], uniq_ordered, side="right"
-            )
-            last_idx = sort_k[boundaries - 1]
-            n_quote = len(last_idx)
-            q_t = qt_arr[last_idx]
-            q_aid = qaid_arr[last_idx]
-            q_side_code = qside_b[last_idx].astype(np.int8)  # 1=BID, 0=ASK
-            q_px = qpx_arr[last_idx]
-            q_sz = qsz_arr[last_idx]
+            q_t = qt_arr
+            q_aid = qaid_arr
+            q_side_code = qside_b.astype(np.int8)  # 1=BID, 0=ASK
+            q_px = np.asarray(<int[:n_quote]>self.qpx).astype(np.int64)
+            q_sz = np.asarray(<int[:n_quote]>self.qsz).astype(np.int64)
             q_msg_code = np.full(n_quote, 6, dtype=np.int8)  # QUOTE_UPDATE
         else:
             n_quote = 0

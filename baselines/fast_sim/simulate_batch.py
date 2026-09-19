@@ -12,6 +12,7 @@ import argparse
 import json
 import os
 import pathlib
+import sys
 import time
 import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -40,6 +41,22 @@ def _worker_count(n_subs: int) -> int:
     return max(1, min(n_subs, 4, os.cpu_count() or 1))
 
 
+def _mp_context():
+    """Pick a start method.
+
+    ``spawn`` re-imports the whole stack in every worker (~0.3–0.4s each) and
+    dominated Phase-1 gbatch walls (~1.2s flat across 3–8 subs). On Linux,
+    ``fork`` after the parent has already imported ``fast_sim.simulate`` keeps
+    those modules warm in children. Override with ``FAST_SIM_BATCH_MP``.
+    """
+    forced = os.environ.get("FAST_SIM_BATCH_MP")
+    if forced:
+        return mp.get_context(forced)
+    if sys.platform.startswith("linux"):
+        return mp.get_context("fork")
+    return mp.get_context("spawn")
+
+
 def simulate_batch(
     batch_dir: str | pathlib.Path, out_dir: str | pathlib.Path
 ) -> dict[str, Any]:
@@ -58,9 +75,9 @@ def simulate_batch(
         for job in jobs:
             results.append(_run_one(job))
     else:
-        # spawn: each child applies patches and resets counters independently.
+        # Each child resets ABIDES counters inside simulate/run_scenario.
         ctx_results: dict[str, dict[str, Any]] = {}
-        ctx = mp.get_context("spawn")
+        ctx = _mp_context()
         with ProcessPoolExecutor(max_workers=workers, mp_context=ctx) as pool:
             futs = {pool.submit(_run_one, job): job[0] for job in jobs}
             for fut in as_completed(futs):
