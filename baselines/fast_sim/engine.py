@@ -5,30 +5,15 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
-import numpy as np
-from abides_core.kernel import Kernel
-from abides_core.message import Message
-from abides_core.utils import subdict
-from abides_markets.orders import Order
 
-from abides_fork.config import build_config
-from fast_sim.columns import ColumnLedger, ColumnTrace
-from fast_sim.extract import extract_message_trace_from_state, extract_trace_from_agents
-from fast_sim.optimize import HeapPQueue, apply_runtime_patches, slim_agents, slim_exchange
-
-try:
-    from fast_sim._hotpath import CLedger, CTrace, EventQueue
-except ImportError:
-    try:
-        from fast_sim.hotpath import EventQueue
-    except ImportError:
-        EventQueue = HeapPQueue
-    CLedger = ColumnLedger
-    CTrace = ColumnTrace
+Kernel = None
 
 
 def reset_abides_counters() -> None:
     """Reset ABIDES class-level id counters so a run is deterministic in-process."""
+    from abides_core.message import Message
+    from abides_markets.orders import Order
+
     Order._order_id_counter = 0
     setattr(Message, "_Message__message_id_counter", 1)
 
@@ -41,7 +26,75 @@ def run_scenario(scenario: dict[str, Any], output_paths=None) -> tuple[Any, Any,
     with the same comparison key ABIDES uses:
     ``(deliver_at, (sender_id, recipient_id, message))`` / ``Message.__lt__``
     by ``message_id``. Delivery order is unchanged.
+
+    Default native rosters take a light boot (numpy-only spec) so cold ``simulate``
+    does not pay pandas / ABIDES agent construction. The light boot is a
+    streaming/file-output path only: in-memory callers (``output_paths=None``),
+    hybrid mode and unsupported agents still go through ``build_config``, which
+    keeps ``native.run_native`` as the single interception point for native
+    failure injection and fallback.
     """
+    from fast_sim.native import (
+        NATIVE_IS_DEFAULT,
+        native_flag,
+        run_native_from_spec,
+    )
+    from fast_sim.native_boot import scenario_supports_native, spec_from_scenario
+
+    # Light path: rebuild the native spec with numpy alone (no pandas / ABIDES
+    # agent construction). Same RNG draw order as ``build_config`` + oracle init.
+    flag = native_flag()
+    light_ok = (
+        output_paths is not None
+        and scenario_supports_native(scenario)
+        and flag not in ("0", "false", "hybrid", "off")
+        and (flag in ("1", "true", "native", "on") or NATIVE_IS_DEFAULT)
+    )
+    if light_ok:
+        try:
+            spec = spec_from_scenario(deepcopy(scenario))
+            return run_native_from_spec(spec, output_paths)
+        except (OSError, MemoryError):
+            raise
+        except Exception as exc:
+            import logging
+
+            logging.getLogger("fast_sim").warning(
+                "Native light boot failed (%s); falling back to build_config path",
+                exc,
+            )
+
+    return _run_scenario_via_build_config(scenario, output_paths)
+
+
+def _run_scenario_via_build_config(
+    scenario: dict[str, Any], output_paths=None
+) -> tuple[Any, Any, dict[str, Any]]:
+    """Heavy path: ABIDES ``build_config`` + native or hybrid kernel."""
+    global Kernel
+    if Kernel is None:
+        from abides_core.kernel import Kernel as _Kernel
+
+        Kernel = _Kernel
+    import numpy as np
+    from abides_core.utils import subdict
+    from abides_fork.config import build_config
+
+    from fast_sim.columns import ColumnLedger, ColumnTrace
+    from fast_sim.extract import extract_message_trace_from_state, extract_trace_from_agents
+    from fast_sim.native import run_native, should_use_native
+    from fast_sim.optimize import HeapPQueue, apply_runtime_patches, slim_agents, slim_exchange
+
+    try:
+        from fast_sim._hotpath import CLedger, CTrace, EventQueue
+    except ImportError:
+        try:
+            from fast_sim.hotpath import EventQueue
+        except ImportError:
+            EventQueue = HeapPQueue
+        CLedger = ColumnLedger
+        CTrace = ColumnTrace
+
     apply_runtime_patches()
     reset_abides_counters()
 
@@ -51,8 +104,6 @@ def run_scenario(scenario: dict[str, Any], output_paths=None) -> tuple[Any, Any,
     agents = config["agents"]
     slim_exchange(agents[0])
     slim_agents(agents)
-
-    from fast_sim.native import run_native, should_use_native
 
     if should_use_native(agents):
         try:
