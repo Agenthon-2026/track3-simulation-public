@@ -65,7 +65,12 @@ class ParquetSink:
         # The shared reader uses pandas metadata to restore nullable int64. Attach
         # the empty frame's metadata without converting every full chunk to pandas.
         if "t_send_ns" in empty.column_names:
-            empty = pa.Table.from_pandas(as_pandas(empty), preserve_index=False)
+            metadata = pa.Table.from_pandas(
+                as_pandas(empty), preserve_index=False
+            ).schema.metadata
+            # Pandas versions can export StringDtype as large_string. Preserve
+            # the input Arrow fields; only the nullable restoration metadata is needed.
+            empty = empty.replace_schema_metadata(metadata)
         self.schema = empty.schema
         strings = [f.name for f in self.schema if pa.types.is_string(f.type)]
         # Small-cardinality integer columns (agent ids, order sizes) compress far

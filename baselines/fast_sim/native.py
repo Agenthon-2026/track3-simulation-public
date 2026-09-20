@@ -232,28 +232,26 @@ def write_parquet(obj: Any, path: Any) -> None:
     (no ``dtype_backend``) promotes those columns to float64 and rounds
     19-digit ns timestamps. That breaks ``t_recv - t_send == latency_ns``
     and causal order on every batch sub even though the in-memory ledger
-    is self-consistent. Write those columns as pandas ``Int64`` so the
-    parquet pandas metadata restores them as integers.
+    is self-consistent. The shared sink attaches nullable pandas metadata
+    from an empty table, preserving integers without converting every row.
     """
     from pathlib import Path
 
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    from fast_sim.streaming import StoredTable
+    from fast_sim.streaming import ParquetSink, StoredTable
 
     if isinstance(obj, StoredTable):
         if obj.path.resolve() != path.resolve():
             raise ValueError("streamed output must be written at its final destination")
         return
     schema = getattr(obj, "schema", None)
-    names = getattr(schema, "names", None) or []
-    if "t_send_ns" in names:
-        as_pandas(obj).to_parquet(path, compression="snappy", index=False)
-        return
     if schema is not None and hasattr(obj, "to_batches"):
-        import pyarrow.parquet as pq
-
-        pq.write_table(obj, path, compression="snappy")
+        sink = ParquetSink(path, obj.slice(0, 0))
+        try:
+            sink.write(obj)
+        finally:
+            sink.close()
         return
     obj.to_parquet(path, compression="snappy", index=False)
 

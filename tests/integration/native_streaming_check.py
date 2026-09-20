@@ -19,7 +19,7 @@ import pyarrow.parquet as pq
 
 from abides_fork.config import build_config
 from fast_sim.engine import reset_abides_counters
-from fast_sim.native import as_pandas, snapshot_native, stream_native
+from fast_sim.native import as_pandas, snapshot_native, stream_native, write_parquet
 from fast_sim._native import (
     classify_native_executions,
     run_native_sim,
@@ -71,7 +71,16 @@ class NativeStreamingTests(unittest.TestCase):
                     actual.equals(expected, check_metadata=False), str(path)
                 )
                 self.assertEqual(result.num_rows, expected.num_rows)
+                buffered_path = path.with_name("buffered-" + path.name)
+                write_parquet(expected, buffered_path)
+                self.assertTrue(
+                    pq.read_table(buffered_path).equals(expected, check_metadata=False),
+                    str(buffered_path),
+                )
                 if "t_send_ns" in expected.column_names:
+                    pd.testing.assert_frame_equal(
+                        pd.read_parquet(buffered_path), as_pandas(expected)
+                    )
                     pd.testing.assert_frame_equal(
                         pd.read_parquet(path), as_pandas(expected)
                     )
@@ -266,6 +275,26 @@ class NativeStreamingTests(unittest.TestCase):
                 self.assertGreater(len(pending), 0)
                 self.assertTrue((pending.msg_type == "MarketClosePriceMsg").any())
                 self.assertLess(lean[1].num_rows, len(drained))
+
+    def test_latency_rounds_halfway_values_to_even(self):
+        scenario = json.loads(
+            (ROOT / "units/t3-s001-price-time-priority/scenario.json").read_text()
+        )
+        scenario["horizon_ns"] = 10_000_000
+        for latency in (0.5, 1.5, 2.5, 3.5, 999_999.5, 1_000_000.5):
+            with self.subTest(latency=latency):
+                spec = spec_for(scenario)
+                spec["latency"].update(
+                    model="deterministic",
+                    min_ns=latency,
+                    max_ns=latency,
+                    mean_ns=latency,
+                )
+                _, messages = run_native_sim(spec)
+                ledger = as_pandas(messages)
+                hops = ledger[ledger.src_id != ledger.dst_id]
+                self.assertGreater(len(hops), 0)
+                self.assertEqual(set(hops.latency_ns), {round(latency)})
 
     def test_replay_count_mismatch_is_an_error(self):
         scenario = json.loads(
