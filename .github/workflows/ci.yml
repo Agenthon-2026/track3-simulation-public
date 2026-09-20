@@ -8,6 +8,10 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
+      diagnose_native:
+        description: "Measure frozen v2 stages on native amd64 (diagnostic only, no image publication)"
+        type: boolean
+        default: false
       build_native:
         description: "Rebuild, test and export native modules on the fixed runtime"
         type: boolean
@@ -45,6 +49,41 @@ env:
   QFBENCH2_COMMON_REF: v2.4.3
 
 jobs:
+  native-diagnosis:
+    name: Diagnose frozen v2 on native amd64
+    if: github.event_name == 'workflow_dispatch' && inputs.diagnose_native
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.13"
+      - name: Install output footer reader
+        run: python -m pip install "pyarrow>=12"
+      - name: Generate separate diagnostic extensions
+        run: |
+          python scripts/diagnostics/instrument_native.py --source baselines/fast_sim/_native.pyx --out out/diagnostic-build/fast_sim/_native_diagnostic.pyx --mode stage
+          python scripts/diagnostics/instrument_native.py --source baselines/fast_sim/_native.pyx --out out/diagnostic-build/fast_sim/_native_profile.pyx --mode profile
+          cp scripts/diagnostics/setup.py out/diagnostic-build/setup.py
+      - name: Build instrumentation beside the published native module
+        run: |
+          docker pull ghcr.io/youxuanxue/track3-simulation-public@sha256:7312745e1c9a09cb898402e74a5d18b83cbfb6b5372a3739464a9c01e6e84259
+          docker build --platform linux/amd64 -f scripts/diagnostics/Dockerfile -t track3-diagnosis:local out/diagnostic-build
+      - name: Measure unchanged CLI, exact stages and instrumented call attribution
+        run: python scripts/diagnostics/run_diagnosis.py run --image track3-diagnosis:local --out out/native-diagnosis --repeats 3 --stage-repeats 5
+      - name: Retain diagnostic evidence and source manifests
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: native-diagnosis-${{ github.run_id }}
+          path: |
+            out/native-diagnosis/
+            out/diagnostic-build/fast_sim/*.json
+          if-no-files-found: error
+          retention-days: 30
   # Runs FIRST and does not install the shared toolkit, so it survives anything that can go
   # wrong with that install below (an unresolvable ref, a bad tag, a network failure). Steps
   # after a failed install are SKIPPED, so any check placed behind one silently does not run
