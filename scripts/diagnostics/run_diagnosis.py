@@ -173,6 +173,14 @@ def container_run(image, unit, dest, verb, *, log_root, scripts=False, workers=N
     output.chmod(0o777)
     batch = (unit / "batch.json").exists()
     mount = unit / "scenarios" if batch else unit / "scenario.json"
+    if batch:
+        # The participant runs as UID 65534. Keep directory ownership with the
+        # host so it can unlink participant-owned files during strict cleanup.
+        # Preparing destinations happens before the measured container launch.
+        for scenario in sorted(mount.glob("*.json")):
+            sub_output = output / scenario.stem
+            sub_output.mkdir()
+            sub_output.chmod(0o777)
     target = "/input/scenarios" if batch else "/input/scenario.json"
     cid = dest / "container.cid"
     cmd = [
@@ -290,6 +298,9 @@ def controller(args):
         ],
         "repeats": args.repeats,
         "units": {},
+        "measurements_complete": False,
+        "cleanup_complete": False,
+        "passed": False,
     }
     with tempfile.TemporaryDirectory(prefix="t3-diagnose-") as scratch:
         scratch = Path(scratch)
@@ -422,6 +433,12 @@ def controller(args):
                 ),
                 flush=True,
             )
+        # Persist completed measurements before TemporaryDirectory cleanup.
+        # A cleanup failure must remain a failure without hiding valid evidence.
+        result["measurements_complete"] = True
+        result["measurements_finished_at"] = datetime.now(timezone.utc).isoformat()
+        save(args.out / "results.json", result)
+    result["cleanup_complete"] = True
     result["passed"] = True
     result["finished_at"] = datetime.now(timezone.utc).isoformat()
     save(args.out / "results.json", result)

@@ -154,3 +154,126 @@ def test_failed_participant_logs_survive_temporary_output_cleanup(
     assert not dest.exists()
     assert (log_root / "unit/run-0/stderr.log").read_bytes() == stderr
     assert (log_root / "unit/run-0/stdout.log").read_bytes() == stdout
+
+
+def test_batch_destinations_are_host_owned_before_participant_launch(
+    tmp_path, monkeypatch
+):
+    import os
+    import stat
+    from throughput import timer
+
+    unit = tmp_path / "batch-unit"
+    scenarios = unit / "scenarios"
+    scenarios.mkdir(parents=True)
+    (unit / "batch.json").write_text("{}")
+    names = ("sub_00", "scenario.with.dots")
+    for name in names:
+        (scenarios / f"{name}.json").write_text("{}")
+    written = []
+
+    def participant(command, **_kwargs):
+        output = next(Path(arg[:-8]) for arg in command if arg.endswith(":/output"))
+        for name in names:
+            directory = output / name
+            # These permissions let UID 65534 create output files, while host
+            # ownership lets the controller remove them even if files are 0644.
+            assert directory.stat().st_uid == os.geteuid()
+            assert stat.S_IMODE(directory.stat().st_mode) == 0o777
+            file = directory / "trace.parquet"
+            file.write_bytes(b"participant output")
+            file.chmod(0o644)
+            written.append(file)
+        return subprocess.CompletedProcess(command, 0, stdout=b"done", stderr=b"")
+
+    monkeypatch.setattr(timer, "bounded_container_run", participant)
+    with tempfile.TemporaryDirectory(dir=tmp_path) as temporary:
+        run_diagnosis.container_run(
+            "unused-image",
+            unit,
+            Path(temporary) / "run-0",
+            ["simulate-batch"],
+            log_root=tmp_path / "logs",
+        )
+        assert [path.read_bytes() for path in written] == [b"participant output"] * 2
+    assert all(not path.exists() for path in written)
+
+
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+def test_controller_records_measurements_before_cleanup_and_requires_cleanup_success(
+    tmp_path, monkeypatch, cleanup_fails
+):
+    from types import SimpleNamespace
+
+    args = SimpleNamespace(
+        unit=["t3-gbatch-dense-3"],
+        out=tmp_path / "evidence",
+        image="unused-image",
+        repeats=1,
+        stage_repeats=1,
+    )
+    monkeypatch.setattr(run_diagnosis.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(run_diagnosis.platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(
+        run_diagnosis.platform,
+        "uname",
+        lambda: ("Linux", "diagnostic-host", "test", "test", "x86_64", "x86_64"),
+    )
+    original_read = Path.read_text
+
+    def read_text(path, *positional, **kwargs):
+        if str(path) in {"/proc/cpuinfo", "/proc/meminfo"}:
+            return "diagnostic host metadata"
+        return original_read(path, *positional, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+
+    def command_output(command, **_kwargs):
+        if command[0] == "git":
+            return "test-commit\n"
+        return json.dumps(
+            [{"Architecture": "amd64", "Os": "linux", "Id": "test-image"}]
+        ).encode()
+
+    monkeypatch.setattr(run_diagnosis.subprocess, "check_output", command_output)
+    monkeypatch.setattr(run_diagnosis, "container_run", lambda *a, **k: (tmp_path, 1.0))
+    monkeypatch.setattr(
+        run_diagnosis,
+        "output_metadata",
+        lambda *_: {
+            "parquet": {"trace.parquet": {"rows": 2}},
+            "actual_events": 2,
+            "events": {"wall_clock_sec": 0.5},
+        },
+    )
+    original_temporary = tempfile.TemporaryDirectory
+
+    class Scratch:
+        def __init__(self, **kwargs):
+            self.actual = original_temporary(dir=tmp_path, **kwargs)
+
+        def __enter__(self):
+            return self.actual.__enter__()
+
+        def __exit__(self, *error):
+            if error[0] is not None:
+                return self.actual.__exit__(*error)
+            before_cleanup = json.loads((args.out / "results.json").read_text())
+            assert before_cleanup["measurements_complete"] is True
+            assert before_cleanup["cleanup_complete"] is False
+            assert before_cleanup["passed"] is False
+            self.actual.__exit__(*error)
+            if cleanup_fails:
+                raise PermissionError("cleanup denied sentinel")
+
+    monkeypatch.setattr(run_diagnosis.tempfile, "TemporaryDirectory", Scratch)
+    if cleanup_fails:
+        with pytest.raises(PermissionError, match="cleanup denied sentinel"):
+            run_diagnosis.controller(args)
+    else:
+        run_diagnosis.controller(args)
+    result = json.loads((args.out / "results.json").read_text())
+    assert result["measurements_complete"] is True
+    assert result["cleanup_complete"] is (not cleanup_fails)
+    assert result["passed"] is (not cleanup_fails)
+    assert result["units"]["t3-gbatch-dense-3"]["cold_cli"][1]["actual_events"] == 2

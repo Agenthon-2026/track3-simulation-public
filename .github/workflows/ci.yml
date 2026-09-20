@@ -12,6 +12,11 @@ on:
         description: "Measure frozen v2 stages on native amd64 (diagnostic only, no image publication)"
         type: boolean
         default: false
+      diagnosis_scope:
+        description: "Full diagnostic roster or bounded tooling smoke"
+        type: choice
+        options: [all, smoke]
+        default: all
       build_native:
         description: "Rebuild, test and export native modules on the fixed runtime"
         type: boolean
@@ -73,7 +78,14 @@ jobs:
           docker pull ghcr.io/youxuanxue/track3-simulation-public@sha256:7312745e1c9a09cb898402e74a5d18b83cbfb6b5372a3739464a9c01e6e84259
           docker build --platform linux/amd64 -f scripts/diagnostics/Dockerfile -t track3-diagnosis:local out/diagnostic-build
       - name: Measure unchanged CLI, exact stages and instrumented call attribution
-        run: python scripts/diagnostics/run_diagnosis.py run --image track3-diagnosis:local --out out/native-diagnosis --repeats 3 --stage-repeats 5
+        env:
+          DIAGNOSIS_SCOPE: ${{ inputs.diagnosis_scope || 'all' }}
+        run: |
+          selection=()
+          if [ "$DIAGNOSIS_SCOPE" = smoke ]; then
+            selection=(--unit t3-mp05-cancel-churn-newest --unit t3-gbatch-varsize)
+          fi
+          python scripts/diagnostics/run_diagnosis.py run --image track3-diagnosis:local --out out/native-diagnosis --repeats 3 --stage-repeats 5 "${selection[@]}"
       - name: Retain diagnostic evidence and source manifests
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
