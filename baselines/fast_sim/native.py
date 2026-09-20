@@ -273,7 +273,11 @@ def run_native_from_spec(
     if output_paths is not None and placements > 1_000_000:
         trace, msg = stream_native(spec, output_paths)
     else:
-        trace, msg = run_native_sim(spec)
+        # The CLI has already decided whether the single-scenario ledger is
+        # optional. Batch always supplies a ledger path, and an in-memory call
+        # must continue to return the complete Arrow table.
+        count_only = output_paths is not None and output_paths[1] is None
+        trace, msg = run_native_sim(spec, count_only=count_only)
     return trace, msg, {"col_trace": None, "col_ledger": None, "agents": agents or []}
 
 

@@ -25,7 +25,10 @@ must survive pandas reload without conversion to float. The workload dispatch is
 parameter-based, never based on scenario IDs.
 
 Single throughput-scale scenarios may omit the optional ledger while retaining the
-complete transaction trace and actual message count. Batch and unknown families
+complete transaction trace and actual message count. Both buffered and streaming
+paths count delivered messages without constructing unused ledger columns. Required
+ledgers use typed column writes while retaining stable delivery order and nulls.
+Batch and unknown families
 retain ledgers; `--require-message-ledger` forces one for diagnostics. The participant
 receives scenario JSON, so a hidden card override must be conveyed by the launch
 interface. Local validation still rejects a missing ledger when its card requires it.
@@ -40,6 +43,9 @@ image handling are in [CANDIDATE-RUNBOOK.md](../../docs/CANDIDATE-RUNBOOK.md).
 docker run --rm --network none --cpus 4 --memory 4g \
   -v "$PWD:/workspace:ro" "$IMAGE" \
   python /workspace/tests/integration/native_streaming_check.py
+docker run --rm --network none --cpus 4 --memory 4g \
+  -v "$PWD:/workspace:ro" "$IMAGE" \
+  python /workspace/tests/integration/native_count_only_check.py
 ```
 
 The integration suite checks buffered versus streamed output, reordering, optional
@@ -47,3 +53,11 @@ ledgers, repeat bytes and failure recovery. Independent parameter comparisons us
 the pinned ABIDES reference adapter, not the candidate's own native implementation.
 Only complete image-bound G1/G2/G3 evidence establishes B0/B1. Historical best-run
 rates and implementation stages remain in Git history, not a current performance claim.
+
+The manually dispatched `validate_development` CI option checks all 71 runnable
+public units against public references and pairs the candidate with the recorded
+online v1 image on native amd64. It publishes the tested candidate only after the
+public checks and aggregate throughput comparison pass, then runs independent
+parameter comparisons and anonymous delivery checks against that published digest.
+The original one-hour exemplar is excluded from this bounded Development check;
+its results do not establish Final qualification or predict an online score.

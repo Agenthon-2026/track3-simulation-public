@@ -21,6 +21,10 @@ on:
         description: "Rebuild, test and export native modules on the fixed runtime"
         type: boolean
         default: false
+      validate_development:
+        description: "Check all 71 runnable public units and paired CLI performance (candidate only)"
+        type: boolean
+        default: false
       candidate_image:
         description: "Immutable candidate image for native qualification (empty runs CI only)"
         type: string
@@ -70,8 +74,11 @@ jobs:
         run: python -m pip install "pyarrow>=12"
       - name: Generate separate diagnostic extensions
         run: |
-          python scripts/diagnostics/instrument_native.py --source baselines/fast_sim/_native.pyx --out out/diagnostic-build/fast_sim/_native_diagnostic.pyx --mode stage
-          python scripts/diagnostics/instrument_native.py --source baselines/fast_sim/_native.pyx --out out/diagnostic-build/fast_sim/_native_profile.pyx --mode profile
+          mkdir -p out/diagnostic-build
+          git fetch --depth=1 origin 8e87b0a1ccc3b7f15ea18dd2a4e048af8b46dc00
+          git show 8e87b0a1ccc3b7f15ea18dd2a4e048af8b46dc00:baselines/fast_sim/_native.pyx > out/diagnostic-build/frozen-v2.pyx
+          python scripts/diagnostics/instrument_native.py --source out/diagnostic-build/frozen-v2.pyx --out out/diagnostic-build/fast_sim/_native_diagnostic.pyx --mode stage
+          python scripts/diagnostics/instrument_native.py --source out/diagnostic-build/frozen-v2.pyx --out out/diagnostic-build/fast_sim/_native_profile.pyx --mode profile
           cp scripts/diagnostics/setup.py out/diagnostic-build/setup.py
       - name: Build instrumentation beside the published native module
         run: |
@@ -270,22 +277,32 @@ jobs:
 
   native-build:
     name: Build and verify native candidate
-    if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.build_native)
+    if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && (inputs.build_native || inputs.validate_development))
     needs: [firewall, lint-type, validate-units]
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 60
     permissions:
       contents: read
+      packages: write
     env:
       IMAGE: ghcr.io/${{ github.repository }}:native-${{ github.sha }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           lfs: true
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.13"
+      - name: Check native ledger column boundaries
+        run: |
+          python -m pip install cython==3.0.11 setuptools numpy pyarrow
+          python tests/integration/native_ledger_columns_check.py
       - name: Rebuild native extensions on the fixed runtime
         run: docker build --platform linux/amd64 -f baselines/Dockerfile.native-candidate -t "$IMAGE" .
       - name: Exact streaming differentials in the candidate image
         run: docker run --rm --network none --cpus 4 --memory 4g -v "$PWD:/workspace:ro" "$IMAGE" python /workspace/tests/integration/native_streaming_check.py
+      - name: Exact optional buffered ledger differentials
+        run: docker run --rm --network none --cpus 4 --memory 4g -v "$PWD:/workspace:ro" "$IMAGE" python /workspace/tests/integration/native_count_only_check.py
       - name: Export tested native modules and build identity
         run: |
           mkdir -p native-overlay
@@ -305,6 +322,68 @@ jobs:
         with:
           name: native-image-${{ github.run_id }}
           path: native-overlay/
+      - name: Install pinned public developer verifier
+        if: github.event_name == 'workflow_dispatch' && inputs.validate_development
+        run: python -m pip install "qfbench2-common[data] @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@${{ env.QFBENCH2_COMMON_REF }}#subdirectory=common" scipy
+      - name: Full public regression and alternating online-baseline pairs
+        if: github.event_name == 'workflow_dispatch' && inputs.validate_development
+        env:
+          ONLINE_BASELINE: ghcr.io/youxuanxue/track3-simulation-public@sha256:212d72f1b4fd28287bde3ba9c24e20b3888fa186830f2ba2de0ed07b864feea0
+        run: |
+          docker pull "$ONLINE_BASELINE"
+          python scripts/validate_development_candidate.py --candidate "$IMAGE" --baseline "$ONLINE_BASELINE" --out out/v3/validation --repeats 3
+          python - <<'PYCODE'
+          import json
+          from pathlib import Path
+          result = json.loads(Path('out/v3/validation/summary.json').read_text())
+          assert result['passed'] and result['full_runnable_roster']
+          metric = result['summary']['self_reported']
+          assert metric['candidate_mean_unit_median_rate'] > metric['baseline_mean_unit_median_rate'], 'Candidate has no measured aggregate improvement'
+          PYCODE
+      - name: Publish the tested Development candidate image
+        if: github.event_name == 'workflow_dispatch' && inputs.validate_development
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+        run: |
+          echo "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          docker push "$IMAGE"
+          docker image inspect "$IMAGE" > out/v3/published-image.json
+          python - <<'PYCODE'
+          import json, os
+          from pathlib import Path
+          image = json.loads(Path('out/v3/published-image.json').read_text())[0]
+          validation = json.loads(Path('out/v3/validation/summary.json').read_text())
+          assert image['Id'] == validation['images']['candidate']['id'], 'Published image differs from measured image'
+          assert validation['source_commit'] == os.environ['GITHUB_SHA'], 'Source revision differs from validation'
+          repository = os.environ['IMAGE'].rsplit(':', 1)[0]
+          digests = [entry.split('@', 1)[1] for entry in image['RepoDigests'] if entry.startswith(repository + '@')]
+          assert len(digests) == 1, 'Expected one published candidate digest'
+          digest = digests[0]
+          registry, name = repository.split('/', 1)
+          candidate = {'image': {'registry': registry, 'repository': name, 'digest': digest}, 'license': 'MIT', 'team_number': 23, 'phase': 'dev'}
+          Path('out/v3/candidate.json').write_text(json.dumps(candidate, indent=2) + '\n')
+          with open(os.environ['GITHUB_ENV'], 'a') as output:
+              output.write('PUBLISHED_CANDIDATE=' + repository + '@' + digest + '\n')
+          PYCODE
+      - name: Independent parameter differentials on the published digest
+        if: github.event_name == 'workflow_dispatch' && inputs.validate_development
+        env:
+          REFERENCE_IMAGE: ghcr.io/youxuanxue/track3-simulation-public@sha256:2da37408571f7701960fe86ce5d4817cc266b328fcad06fec7b8b4aef4d031f5
+        run: |
+          docker pull "$REFERENCE_IMAGE"
+          python scripts/validate_candidate_parameters.py generate --seed "$((GITHUB_RUN_ID % 1000000000))" --reference-image "$REFERENCE_IMAGE" --out out/v3/holdouts
+          python scripts/validate_candidate_parameters.py run --plan out/v3/holdouts/holdout.json --image "$PUBLISHED_CANDIDATE" --out out/v3/parameters
+      - name: Anonymous pull and both offline submission verbs
+        if: github.event_name == 'workflow_dispatch' && inputs.validate_development
+        run: python scripts/prepare_submission.py verify-delivery --candidate out/v3/candidate.json --out out/v3/delivery
+      - name: Retain Development evidence including incomplete runs
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.validate_development
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: development-candidate-${{ github.run_id }}
+          path: out/v3/
+          if-no-files-found: warn
+          retention-days: 30
 
   native-qualification:
     name: Native candidate qualification (non-rankable)

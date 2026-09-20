@@ -1014,23 +1014,39 @@ cdef class CLedger:
         parent = np.empty(n, dtype=np.int64)
         parent_na = np.zeros(n, dtype=np.bool_)
         mtype = np.empty(n, dtype=object)
+        # Typed memoryviews keep the row materialization loop in Cython's C
+        # fast path without requiring NumPy's C-API headers at build time.
+        cdef long long[::1] seq_v = seq
+        cdef long long[::1] mid_v = mid
+        cdef int[::1] src_v = src
+        cdef int[::1] dst_v = dst
+        cdef long long[::1] t_recv_v = t_recv
+        cdef long long[::1] lat_v = lat
+        cdef long long[::1] t_send_v = t_send
+        cdef unsigned char[::1] t_send_na_v = t_send_na
+        cdef long long[::1] oid_v = oid
+        cdef unsigned char[::1] oid_na_v = oid_na
+        cdef long long[::1] parent_v = parent
+        cdef unsigned char[::1] parent_na_v = parent_na
+        cdef object[::1] mtype_v = mtype
+        cdef int mt
         names = _MT_NAMES
         for i in range(n):
             r = &self.rows[i]
-            seq[i] = r.seq
-            mid[i] = r.mid
-            src[i] = r.src
-            dst[i] = r.dst
-            t_recv[i] = r.t_recv
-            lat[i] = r.lat
-            t_send[i] = r.t_send
-            oid[i] = r.oid
-            parent[i] = r.parent
-            t_send_na[i] = bool(r.flags & LF_SEND_NA)
-            oid_na[i] = bool(r.flags & LF_OID_NA)
-            parent_na[i] = bool(r.flags & LF_PARENT_NA)
+            seq_v[i] = r.seq
+            mid_v[i] = r.mid
+            src_v[i] = r.src
+            dst_v[i] = r.dst
+            t_recv_v[i] = r.t_recv
+            lat_v[i] = r.lat
+            t_send_v[i] = r.t_send
+            oid_v[i] = r.oid
+            parent_v[i] = r.parent
+            t_send_na_v[i] = (r.flags & LF_SEND_NA) != 0
+            oid_na_v[i] = (r.flags & LF_OID_NA) != 0
+            parent_na_v[i] = (r.flags & LF_PARENT_NA) != 0
             mt = r.mtype
-            mtype[i] = names[mt] if 0 <= mt < len(names) else "AGENT_WAKEUP"
+            mtype_v[i] = names[mt] if 0 <= mt < len(names) else "AGENT_WAKEUP"
         keep = seq >= 0
         if not keep.any():
             return None
@@ -1099,6 +1115,19 @@ cdef class CLedger:
             "order_id": _nullable_int64(a["order_id"], a["oid_na"]),
             "causal_parent": _nullable_int64(a["causal_parent"], a["parent_na"]),
         }).astype(_MSG_DTYPES, copy=False)
+
+    def count_only_result(self):
+        """Return the delivery count without materializing ledger columns.
+
+        Mode 3 deliberately never allocates ``LRow`` records.  Keep the result
+        as the small Python ``UnstoredLedger`` protocol object used by the
+        streaming path so callers can read ``num_rows`` without branching on
+        the native implementation.
+        """
+        from fast_sim.streaming import UnstoredLedger
+        result = UnstoredLedger()
+        result.num_rows = int(self.count)
+        return result
 
 
 cdef class CPriceLevel:
@@ -2009,11 +2038,18 @@ cdef class NativeSim:
         return self.trace.to_arrow(), self.ledger.to_arrow()
 
 
-def run_native_sim(spec):
+def run_native_sim(spec, count_only=False):
     cdef NativeSim sim = NativeSim()
+    if count_only:
+        # Optional throughput-scale ledgers still need their exact delivery
+        # count for events.json, but no row payload or Arrow conversion.
+        sim.ledger.mode = 3
     sim.setup(spec)
     sim.run_loop()
-    return sim.result()
+    trace = sim.trace.to_arrow()
+    if count_only:
+        return trace, sim.ledger.count_only_result()
+    return trace, sim.ledger.to_arrow()
 
 
 def classify_native_executions(spec):
