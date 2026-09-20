@@ -56,8 +56,11 @@ rates and implementation stages remain in Git history, not a current performance
 
 The manually dispatched `validate_development` CI option checks all 71 runnable
 public units against public references and pairs the candidate with the recorded
-online v1 image on native amd64. It publishes the tested candidate only after the
-public checks and aggregate throughput comparison pass, then runs independent
-parameter comparisons and anonymous delivery checks against that published digest.
+online v1 image on native amd64 and exports the compiled artifact and evidence.
+After publishing through the existing registry credentials, dispatch
+`verify_development_image` with the immutable `candidate_image` digest. This checks
+all 71 runnable public units again, compares paired throughput, runs independent
+parameter comparisons and verifies anonymous delivery with both offline verbs
+against the final published digest before packaging.
 The original one-hour exemplar is excluded from this bounded Development check;
 its results do not establish Final qualification or predict an online score.
