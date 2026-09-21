@@ -9,9 +9,11 @@ measurement was present — which was always. Both halves of the fraction were t
 emitted trace, but ``wall_clock_sec`` was compared against nothing, so an honest trace with a
 shrunken clock passed every consistency check at an arbitrary rank.
 
-The producer now exists. C2 carries host-measured ``timing``, per-repeat records, Runner-measured
-``output_row_counts`` read from the parquet footer (frozen ruling R-3), and telemetry with GPU
-attribution. **This module is the only source of a ranked Track 3 rate, and it has no fallback.**
+C2 can carry host-measured ``timing``, per-repeat records, Runner-measured ``output_row_counts``
+read from the parquet footer (frozen ruling R-3), and telemetry with GPU attribution. The candidate
+stable-repeat consumer requires a matching producer; its existence does not establish that the
+real host repeat launcher has run. **This module is the only source of a ranked Track 3 rate,
+and it has no fallback.**
 There is no environment flag, no strict mode, and no "measurement absent" branch that still returns
 a number. A developer profile that ranks on a self-report exists in
 :mod:`qfbench2_track_simulation.host_metrics`, is reachable only through a separately named
@@ -24,22 +26,14 @@ factory, and stamps ``rankable = False`` on everything it emits.
    Device-index-only telemetry is inadmissible; the contract's own parser refuses it outright.
 2. **The instance was otherwise idle.** Track 3's fairness rule is "same pinned, otherwise-idle
    instance", so a shared or thermally throttled window is not a comparable measurement.
-3. **Every repeat is validated, not just the last.** The plan commits ``repeats`` and
-   ``warmup_discarded``; C2 must carry exactly that many repeat records, each individually
-   rankable, and each measured repeat's ``output_tree_digest`` and ``event_count`` must equal the
-   tree that was actually scored. That is what closes alternating fast-invalid / slow-valid repeats
-   *regardless of which repeat happened to be retained*: a repeat that produced different bytes
-   cannot match the digest of the tree the semantic gates read.
-
-   **Known defect, `track3-simulation-public#5` / `Agenthon2026#116`.** The digest half of that is
-   currently unsatisfiable by an honest submission. ``output_tree_digest`` is a byte hash of the
-   whole ``/output`` tree; ``events.json`` is inside it and must carry a real ``wall_clock_sec``;
-   so the digest changes on every repeat for reasons that have nothing to do with the simulation.
-   The determinism claim holds only of :data:`limits.STABLE_OUTPUT_FILES`, and C2 gives Track 3 no
-   per-file digest to compare that subset against. The repair belongs to the producer of
-   ``output_tree_digest`` and is tracked in those issues; the acceptance test for it is
-   ``tests/test_telemetry_binding.py::test_an_honest_submission_is_not_refused_for_reporting_its_real_wall_clock``,
-   which XFAILs until it lands.
+3. **Every repeat is validated, including discarded warmups.** The plan commits the repeat
+   policy. The candidate ``t3-stable-output-v1`` protocol binds the fixed semantic file set from
+   the organizer's card and batch shape in each signed C2 repeat. The scorer recomputes that
+   binding from retained sanitized files. Timing sidecars may vary; traces and message ledgers
+   may not. Missing evidence or a different policy is an organizer fault. Changed content or
+   counts are participant failures. The final repeat must still carry the full C3 tree digest
+   retained by the C2 record. This consumer requires the matching producer and coordinated release;
+   it does not establish that a real repeat launcher or official timing service has been deployed.
 4. **The numerator is the Runner's, and it must equal the reference.** R-3 gives the row count to
    the Runner; Track 3 verifies it against the organizer's reference count. A padded trace is
    refused at the numerator as well as by the semantic gate, so extra rows can never buy rank.
@@ -57,17 +51,25 @@ was not reproducible across the repeats the protocol ran.
 from __future__ import annotations
 
 import math
+import json
 import statistics
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from qfbench2_common.contracts import (
+    ContractError,
     EvaluationPlan,
     OrganizerFault,
     ParticipantFailure,
     RunRecord,
+    digest_members,
+    normalize_tree_path,
+    stable_output_binding,
     telemetry_admissible_for_timing,
 )
+
+from .limits import stable_repeat_policy_for
 
 __all__ = [
     "MAX_CONSECUTIVE_MISSED_SAMPLES",
@@ -80,7 +82,9 @@ __all__ = [
     "ranked_timing",
     "require_exclusive_instance",
     "require_official_telemetry",
+    "require_repeat_evidence",
     "trusted_event_count",
+    "validate_repeat_sidecars",
 ]
 
 #: Frozen C7 telemetry thresholds for a ranked Track 3 rate (02A §3).
@@ -220,42 +224,247 @@ def measured_repeats(
     return tuple(record.repeats[discard:])
 
 
-def _assert_repeats_reproduce_scored_tree(
-    record: RunRecord, repeats: Sequence[Mapping[str, Any]], n_events: int
-) -> None:
-    """Every measured repeat must have produced the bytes the semantic gates actually read.
+def require_repeat_evidence(record: RunRecord, plan: EvaluationPlan) -> None:
+    """Require candidate repeat evidence before participant gates can attribute a failure.
 
-    This is the only check that reaches the repeats whose output was *not* retained, which is what
-    makes alternating fast-invalid / slow-valid repeats fail regardless of which one happened to be
-    last. That protection is why the digest comparison has not simply been deleted in response to
-    the defect below.
-
-    **It is not a property an honest submission satisfies for free**, which this docstring used to
-    claim. Determinism given the seed holds of the parquet outputs, not of the whole tree:
-    ``events.json`` is inside the hashed tree and must report a real ``wall_clock_sec``, so an
-    honest submission's digest differs on every repeat and is refused here
-    (`track3-simulation-public#5`, `Agenthon2026#116`). Track 3 cannot narrow the comparison
-    itself, because C2 carries one opaque whole-tree digest per repeat and the repeat key set is
-    closed. See :data:`qfbench2_track_simulation.limits.VOLATILE_OUTPUT_FILES` for the set that
-    has to come out of the producer's digest, and
-    :data:`qfbench2_track_simulation.limits.VOLATILE_EVENTS_FIELDS` for the fields inside
-    ``events.json`` that move.
+    The shared entrypoint verifies Ed25519 and production trust before calling the track. This
+    additional check ensures a caller did not add bindings after the attested payload was made;
+    it is not a replacement for verifying the signature against the organizer trust store.
     """
-    scored_digest = record.bindings["sanitized_tree_digest"]
-    divergent_digest = [
-        int(r["index"]) for r in repeats if r["output_tree_digest"] != scored_digest
-    ]
-    divergent_count = [
-        int(r["index"]) for r in repeats if int(r["event_count"]) != n_events
-    ]
-    if divergent_digest or divergent_count:
-        raise ParticipantFailure(
-            f"unit {record.unit_handle!r}: {len(divergent_digest)} measured repeat(s) produced a "
-            f"different output tree and {len(divergent_count)} produced a different event count "
-            "than the tree that was scored. A scenario is deterministic given its seed, so the "
-            "repeats must agree; a submission whose repeats differ has not demonstrated the "
-            "measured rate on the output that was checked."
+    measured_repeats(record, plan)
+    if plan.every_repeat_must_pass is not True:
+        raise OrganizerFault("official Track 3 requires every_repeat_must_pass")
+    if (
+        record.attestation is None
+        or record.attestation.observation_verdict != "confirmed"
+    ):
+        raise OrganizerFault(
+            "official Track 3 repeat evidence has no confirmed Runner attestation"
         )
+    try:
+        signed_digest = record.attestation_payload_digest()
+    except ContractError:
+        raise OrganizerFault(
+            "official Track 3 repeat evidence has no attested payload"
+        ) from None
+    if signed_digest != record.attestation.signature.payload_digest:
+        raise OrganizerFault(
+            "official Track 3 repeat evidence is outside the attested payload"
+        )
+    raw_repeats = record.raw.get("repeats", [])
+    if not isinstance(raw_repeats, list) or len(raw_repeats) != len(record.repeats):
+        raise OrganizerFault("repeat evidence differs from the attested record")
+    for index, repeat in enumerate(record.repeats):
+        if "stable_output_binding" not in repeat:
+            raise OrganizerFault(
+                "official Track 3 requires signed stable-output evidence for every repeat; "
+                "deploy the matching producer before enabling this profile"
+            )
+        if repeat["stable_output_binding"] != raw_repeats[index].get(
+            "stable_output_binding"
+        ):
+            raise OrganizerFault(
+                "stable-output evidence differs from the attested record"
+            )
+        elapsed = float(repeat["elapsed_sec"])
+        if not math.isfinite(elapsed) or elapsed <= 0.0:
+            raise OrganizerFault(
+                "a HOST-measured repeat, including warmups, has invalid elapsed time"
+            )
+    if (
+        record.repeats[-1]["output_tree_digest"]
+        != record.bindings["sanitized_tree_digest"]
+    ):
+        raise OrganizerFault(
+            "the final repeat does not bind the retained full C3 output tree; "
+            "the producer and scorer disagree on retention"
+        )
+
+
+def _assert_repeats_reproduce_scored_tree(
+    record: RunRecord,
+    *,
+    unit_dir: Path,
+    output_dir: Path,
+) -> None:
+    """Compare the fixed organizer policy and retained semantic bytes to every signed repeat."""
+    policy = stable_repeat_policy_for(unit_dir)
+    try:
+        binding = stable_output_binding(output_dir, **policy)
+    except (ContractError, OSError):
+        raise ParticipantFailure(
+            "the retained output is missing or has invalid required stable artifacts"
+        ) from None
+    for repeat in record.repeats:
+        if repeat["stable_output_binding"]["policy_digest"] != binding["policy_digest"]:
+            raise OrganizerFault(
+                "a repeat uses a different stable-output policy; deploy matching producer and scorer"
+            )
+    divergent_digest = [
+        r
+        for r in record.repeats
+        if r["stable_output_binding"]["content_digest"] != binding["content_digest"]
+    ]
+    if divergent_digest:
+        raise ParticipantFailure(
+            f"{len(divergent_digest)} repeat(s) produced different stable output content. "
+            "Every repeat, including discarded warmups, must reproduce the checked simulation."
+        )
+
+
+def validate_repeat_sidecars(
+    unit_dir: str | Path,
+    output_dir: str | Path,
+    output_row_counts: Mapping[str, int],
+) -> None:
+    """Validate every repeat's volatile sidecars outside the timed window.
+
+    The producer calls this for every sanitized repeat; the consumer calls it for retained output.
+    Counts are Runner-read parquet-footer counts, never participant claims. This checks structure,
+    scenario/seed, arithmetic and trace hashes, not the retained trace's full semantic regression.
+    """
+    unit, output = Path(unit_dir), Path(output_dir)
+    policy = stable_repeat_policy_for(unit)
+    traces = [
+        name
+        for name in policy["members"]
+        if name.endswith("trace.parquet") and not name.endswith("message_trace.parquet")
+    ]
+    try:
+        if traces == [TRACE_RELPATH]:
+            scenarios = {TRACE_RELPATH: "scenario.json"}
+        else:
+            subs = json.loads((unit / "batch.json").read_text(encoding="utf-8"))["subs"]
+            scenarios = {
+                f"{entry['sub']}/trace.parquet": normalize_tree_path(
+                    entry["scenario_file"]
+                )
+                for entry in subs
+            }
+        declared_scenarios = {}
+        for trace, relative in scenarios.items():
+            path = unit / relative
+            if not path.resolve().is_relative_to(unit.resolve()):
+                raise OrganizerFault("organizer repeat scenario escapes the unit root")
+            scenario = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(scenario, dict):
+                raise ValueError("scenario must be an object")
+            declared_scenarios[trace] = scenario
+    except OrganizerFault:
+        raise
+    except (OSError, ValueError, KeyError, TypeError, ContractError):
+        raise OrganizerFault(
+            "organizer repeat scenarios are missing or malformed"
+        ) from None
+
+    def read_object(path: Path) -> dict[str, Any]:
+        try:
+            if path.stat().st_size > 1024 * 1024:
+                raise ValueError("oversized sidecar")
+            value = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(value, dict):
+                raise ValueError("sidecar must be an object")
+            return value
+        except (OSError, ValueError, RecursionError):
+            raise ParticipantFailure(
+                "repeat sidecar is missing, oversized or malformed"
+            ) from None
+
+    def check_numbers(sidecar: Mapping[str, Any], field: str, count: int) -> None:
+        n = sidecar.get(field)
+        if isinstance(n, bool) or not isinstance(n, int) or n != count or n <= 0:
+            raise ParticipantFailure(
+                "repeat sidecar event count disagrees with the trace"
+            )
+        values = [sidecar.get("wall_clock_sec"), sidecar.get("events_per_sec")]
+        if any(isinstance(v, bool) or not isinstance(v, (int, float)) for v in values):
+            raise ParticipantFailure(
+                "repeat sidecar timing fields must be finite numbers"
+            )
+        try:
+            wall = float(sidecar["wall_clock_sec"])
+            rate = float(sidecar["events_per_sec"])
+        except (OverflowError, ValueError):
+            raise ParticipantFailure(
+                "repeat sidecar timing fields must be finite numbers"
+            ) from None
+        if not math.isfinite(wall) or not math.isfinite(rate) or wall <= 0 or rate < 0:
+            raise ParticipantFailure(
+                "repeat sidecar timing fields must be finite and positive"
+            )
+        computed = count / wall
+        if not math.isfinite(computed) or abs(rate - computed) / computed > 0.05:
+            raise ParticipantFailure(
+                "repeat sidecar rate is inconsistent with its count and time"
+            )
+
+    for trace in traces:
+        count = output_row_counts.get(trace)
+        if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+            raise OrganizerFault(
+                "Runner footer counts are missing for a declared repeat trace"
+            )
+        sidecar = read_object(output / Path(trace).parent / "events.json")
+        check_numbers(sidecar, "n_events", count)
+        if (
+            not isinstance(sidecar.get("scenario_id"), str)
+            or not sidecar["scenario_id"]
+            or isinstance(sidecar.get("seed"), bool)
+            or not isinstance(sidecar.get("seed"), int)
+        ):
+            raise ParticipantFailure(
+                "repeat sidecar scenario identity or seed is malformed"
+            )
+        scenario = declared_scenarios[trace]
+        for name in ("scenario_id", "seed"):
+            if name not in sidecar or (
+                name in scenario and sidecar[name] != scenario[name]
+            ):
+                raise ParticipantFailure(
+                    "repeat sidecar does not match its organizer scenario"
+                )
+        try:
+            actual = digest_members(output, [trace]).get(trace)
+        except (OSError, ContractError):
+            raise ParticipantFailure("repeat trace is unavailable or invalid") from None
+        claimed = sidecar.get("trace_sha256")
+        if (
+            actual is None
+            or not isinstance(claimed, str)
+            or claimed.strip().lower() != actual.lower()
+        ):
+            raise ParticipantFailure(
+                "repeat sidecar trace digest does not match the trace"
+            )
+
+    if traces != [TRACE_RELPATH]:
+        aggregate = read_object(output / "batch_events.json")
+        check_numbers(
+            aggregate, "total_events", sum(output_row_counts[p] for p in traces)
+        )
+        rows = aggregate.get("per_scenario")
+        if not isinstance(rows, list) or len(rows) != len(traces):
+            raise ParticipantFailure(
+                "repeat batch sidecar does not cover the declared subs"
+            )
+        expected = {str(Path(p).parent): output_row_counts[p] for p in traces}
+        seen = set()
+        for row in rows:
+            if not isinstance(row, dict):
+                raise ParticipantFailure("repeat batch sidecar has malformed sub rows")
+            sub, count = row.get("sub"), row.get("n_events")
+            if (
+                not isinstance(sub, str)
+                or sub not in expected
+                or sub in seen
+                or isinstance(count, bool)
+                or not isinstance(count, int)
+                or count != expected[sub]
+            ):
+                raise ParticipantFailure(
+                    "repeat batch sidecar has inconsistent sub counts"
+                )
+            seen.add(sub)
 
 
 def ranked_timing(
@@ -264,6 +473,8 @@ def ranked_timing(
     *,
     reference_event_count: int | None = None,
     sub_names: Sequence[str] | None = None,
+    unit_dir: str | Path | None = None,
+    output_dir: str | Path | None = None,
 ) -> RankedTiming:
     """The ranked events/sec for one unit, or an exception naming whose fault it is.
 
@@ -273,8 +484,26 @@ def ranked_timing(
     """
     require_official_telemetry(record)
     require_exclusive_instance(record)
+    require_repeat_evidence(record, plan)
 
-    n_events = trusted_event_count(record, sub_names=sub_names)
+    if unit_dir is None or output_dir is None:
+        raise OrganizerFault(
+            "official Track 3 requires organizer unit and retained output roots"
+        )
+    policy = stable_repeat_policy_for(unit_dir)
+    traces = [name for name in policy["members"] if name.endswith("/trace.parquet")]
+    declared_subs = [str(Path(name).parent) for name in traces] or None
+    if sub_names is not None and list(sub_names) != declared_subs:
+        raise OrganizerFault(
+            "repeat event-count scope disagrees with the organizer unit shape"
+        )
+
+    # Missing participant artifacts remain participant failures even when no footer count
+    # could be produced for them. A present trace with missing count is an organizer fault.
+    _assert_repeats_reproduce_scored_tree(
+        record, unit_dir=Path(unit_dir), output_dir=Path(output_dir)
+    )
+    n_events = trusted_event_count(record, sub_names=declared_subs)
     if reference_event_count is not None and n_events != reference_event_count:
         raise ParticipantFailure(
             f"unit {record.unit_handle!r}: the emitted trace has {n_events} row(s) but the "
@@ -287,7 +516,12 @@ def ranked_timing(
         raise OrganizerFault(
             f"unit {record.unit_handle!r}: the plan's warm-up discard leaves no measured repeat"
         )
-    _assert_repeats_reproduce_scored_tree(record, repeats, n_events)
+    if any(int(r["event_count"]) != n_events for r in record.repeats):
+        raise ParticipantFailure(
+            "a repeat produced a different event count than the scored tree. "
+            "Every repeat, including discarded warmups, must reproduce the checked simulation."
+        )
+    validate_repeat_sidecars(unit_dir, output_dir, record.output_row_counts)
 
     rates: list[float] = []
     for repeat in repeats:

@@ -13,6 +13,7 @@ from __future__ import annotations
 import copy
 import json
 import pathlib
+import tempfile
 from typing import Any
 
 import qfbench2_common.contracts as _contracts
@@ -115,6 +116,37 @@ def run_record_mapping(
 
 def run_record(**kwargs: Any) -> RunRecord:
     return RunRecord.from_mapping(run_record_mapping(**kwargs))
+
+
+def signed_record(raw: dict[str, Any]) -> RunRecord:
+    """Sign a synthetic record with the public development key, never production trust."""
+    from qfbench2_common.contracts.fixtures import DEV_KEY_ID, DEV_SEED
+    from qfbench2_common.contracts.run_record import attestation_payload
+    from qfbench2_common.contracts.signing import sign_payload
+
+    raw["attestation"]["signature"] = sign_payload(
+        attestation_payload(raw), seed=DEV_SEED, key_id=DEV_KEY_ID,
+        signed_at="2026-08-21T10:05:00Z",
+    ).to_mapping()
+    return RunRecord.from_mapping(raw)
+
+
+def bind_output(raw: dict[str, Any], unit: pathlib.Path, out: pathlib.Path) -> RunRecord:
+    """Synthetic identical-repeat evidence over real sanitized file bytes."""
+    from qfbench2_common.contracts import stable_output_binding
+    from qfbench2_common.sanitize import materialize_tree
+    from qfbench2_track_simulation.limits import allowed_paths_for, stable_repeat_policy_for
+
+    with tempfile.TemporaryDirectory() as tmp:
+        target = pathlib.Path(tmp) / "sanitized"
+        result = materialize_tree(out, target, allowed_paths=allowed_paths_for(unit))
+        assert not result.rejections
+        raw["bindings"]["sanitized_tree_digest"] = result.tree_digest()
+        binding = stable_output_binding(target, **stable_repeat_policy_for(unit))
+    for repeat in raw["repeats"]:
+        repeat["output_tree_digest"] = raw["bindings"]["sanitized_tree_digest"]
+        repeat["stable_output_binding"] = dict(binding)
+    return signed_record(raw)
 
 
 def telemetry_block(**over: Any) -> dict[str, Any]:
