@@ -391,8 +391,9 @@ official per-unit rate comes from the repeat measurement described above. A boot
 confidence interval is reported alongside the score; resampling is by
 scenario **family** rather than by unit, because units within a family share a generator and an
 agent mix and so are correlated (see `cluster_key` in `qfbench2_track_simulation/scoring.py`).
-Tie-breaking below the score is a platform-level rule and is not specified in this repository —
-do not assume the CI lower bound decides it.
+A tie in the ranking score is broken in favour of the Final submission uploaded earlier (see
+[Competition schedule and submission limits](#competition-schedule-and-submission-limits)); the
+bootstrap CI lower bound does not decide it.
 
 ### Local timing
 
