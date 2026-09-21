@@ -185,10 +185,19 @@ def test_published_competitive_rates_are_never_refused() -> None:
         ), rate
 
 
-def test_measured_honest_rates_from_issue_19_are_never_refused() -> None:
-    """track3-simulation-public#19. Four units of a real submission reported these single-market
-    rates, confirmed by the organizers from its events.json, and at the old 1e7 ceiling every one
-    was refused as schema_invalid and scored zero: the fastest engine lost its fastest units."""
+def test_self_reported_rates_from_issue_19_are_never_refused() -> None:
+    """track3-simulation-public#19. Four units of a real submission SELF-REPORTED these
+    single-market rates in their own events.json, and at the old 1e7 ceiling every one was refused
+    as schema_invalid and scored zero.
+
+    They are not organizer measurements and nothing here treats them as one: the Development path
+    has no organizer clock, which is the very reason this ceiling exists. What the organizers
+    confirmed on #19 is which gate refused the units, not that the rates were real. They are pinned
+    here as the shape of self-report a cancel-heavy unit plausibly produces, so that a ceiling
+    regression that would refuse them again fails the suite instead of a participant's board: this
+    test pins the gate's behaviour at the literal above, and
+    `test_domain_ceiling.py::test_the_host_metrics_ceiling_literal_agrees_with_the_single_definition`
+    pins that literal to `domain.DEV_PLAUSIBILITY_CEILING_PER_MARKET`."""
     for rate in (12_040_000.0, 10_470_000.0, 10_870_000.0, 10_880_000.0):
         assert (
             H.implausible_self_report(

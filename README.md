@@ -125,9 +125,12 @@ The `events_per_sec` value must be consistent with `n_events ÷ wall_clock_sec` 
 ±5%. The harness verifies this consistency check and disqualifies submissions that report
 inflated throughput.
 
-On the Development board, where your own `events_per_sec` is the score input, a single-market
-rate above 1e9 events/sec is refused as implausible; for a batch unit the bound is multiplied by
-its number of markets. This applies to the Development board only.
+On the Development board your `events_per_sec` is a self-report: no organizer clock times a
+Development run, so the number you write is the score input. It is therefore bounded — a
+self-reported single-market rate above 1e9 events/sec is refused as implausible, and for a batch
+unit that bound is multiplied by the unit's number of markets. This applies to the Development
+board only; on the Final path the rate is measured by the organizers' host, so there is no
+self-reported magnitude left to bound.
 
 ### `message_trace.parquet`
 
