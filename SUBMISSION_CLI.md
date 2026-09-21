@@ -41,6 +41,26 @@ Build a `linux/amd64` image identified by its immutable digest. Follow the
 for anonymous public pulls and the organizer confirmation required before using a private mirror.
 A descriptor category or image-access field does not itself make a service available.
 
+## How an upload is made
+
+An upload is a **zip, not an image reference**. Push your `linux/amd64` image to a registry that
+allows anonymous pulls by digest (the image submission guide above), write `submission.json`
+with that digest (the sealed descriptor, see the
+[descriptor guide](https://github.com/Agenthon-2026/Agenthon2026-public/blob/v2.4.3/starter-packs/track3/SUBMISSION-DESCRIPTOR.md)),
+then let the toolkit seal and pack it:
+
+```bash
+qfbench2 submission pack --descriptor submission.json --team-number <your team number> --out submission.zip
+```
+
+`pack` asks for your Team Key on a hidden prompt, derives your `team_id`, and writes
+`submission.zip` containing `submission.json` and `team-claim.json` -- the
+[team-claim guide](https://github.com/Agenthon-2026/Agenthon2026-public/blob/v2.4.3/starter-packs/track3/TEAM-CLAIM.md)
+explains the claim and what happens when it is wrong. Upload `submission.zip` on this track's
+CodaBench competition page from your team's designated CodaBench account; the page link was
+issued to registered teams at the Development opening and is in the participant announcements.
+The Team Key never goes into the zip and is never sent to anyone.
+
 ## Development submission limits
 
 At the participant Development opening, **Track 3 allows 5 uploads per team per day**,
