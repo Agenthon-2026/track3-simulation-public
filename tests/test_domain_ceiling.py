@@ -150,7 +150,7 @@ def test_the_host_metrics_ceiling_literal_agrees_with_the_single_definition() ->
     assert HM.CEILING_PER_MARKET == D.DEV_PLAUSIBILITY_CEILING_PER_MARKET
 
 
-def test_the_dev_ceiling_sits_two_orders_above_the_highest_self_report_on_record() -> None:
+def test_the_dev_ceiling_sits_an_order_of_magnitude_above_the_highest_self_report() -> None:
     """The Development ceiling clears the fastest self-report anyone has actually submitted.
 
     The figure below is a SELF-REPORT from track3-simulation-public#19, not a measurement: the
@@ -163,6 +163,7 @@ def test_the_dev_ceiling_sits_two_orders_above_the_highest_self_report_on_record
     requirement and abort Final unless the plan moved in lockstep.
     """
     highest_self_report = 12_040_000.0  # track3-simulation-public#19, the submission's events.json
+    # Margin at the shipped value: 1e9 / 1.204e7 = 83x. The floor asserted here is 10x.
     assert D.DEV_PLAUSIBILITY_CEILING_PER_MARKET > 10 * highest_self_report
     assert D.DEV_PLAUSIBILITY_CEILING_PER_MARKET < 1e11  # still refuses the pinned fabrication
     assert D.MAX_PER_MARKET_EVENTS_PER_SEC == 1e7  # the Final clip derivation is untouched
