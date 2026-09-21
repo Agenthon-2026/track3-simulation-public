@@ -147,7 +147,19 @@ def test_the_host_metrics_ceiling_literal_agrees_with_the_single_definition() ->
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import test_host_metrics as HM  # noqa: PLC0415
 
-    assert HM.CEILING_PER_MARKET == D.MAX_PER_MARKET_EVENTS_PER_SEC
+    assert HM.CEILING_PER_MARKET == D.DEV_PLAUSIBILITY_CEILING_PER_MARKET
+
+
+def test_the_dev_ceiling_sits_an_order_of_magnitude_above_the_measured_honest_top() -> None:
+    """The rule that derived the old ceiling, applied to a measurement instead of a withdrawn band.
+
+    Kept separate from the Final constant on purpose: raising that one would move the Hub's C1 clip
+    requirement and abort Final unless the plan moved in lockstep.
+    """
+    measured_top = 12_040_000.0  # track3-simulation-public#19, confirmed by the organizers
+    assert D.DEV_PLAUSIBILITY_CEILING_PER_MARKET > 10 * measured_top
+    assert D.DEV_PLAUSIBILITY_CEILING_PER_MARKET < 1e11  # still refuses the reported fabrication
+    assert D.MAX_PER_MARKET_EVENTS_PER_SEC == 1e7  # the Final clip derivation is untouched
 
 
 def _run_all() -> int:

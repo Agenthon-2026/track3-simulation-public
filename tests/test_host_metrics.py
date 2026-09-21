@@ -48,7 +48,7 @@ FABRICATED = 604_000_000.0
 #: The single definition lives in `qfbench2_track_simulation.domain`; repeated here as a literal
 #: because this file deliberately loads one module without its package. `test_domain_ceiling.py`
 #: asserts the two agree, so a drift is caught by a test rather than by a wrong refusal.
-CEILING_PER_MARKET = 1e7
+CEILING_PER_MARKET = 1e9
 
 
 def _map(**over: object) -> dict[str, object]:
@@ -177,6 +177,19 @@ def test_plausibility_ceiling_scales_with_batch_width() -> None:
 def test_published_competitive_rates_are_never_refused() -> None:
     """Nothing in the documented performance band may be refused (baselines/README.md)."""
     for rate in (65_000.0, 400_000.0, 600_000.0, 1_000_000.0):
+        assert (
+            H.implausible_self_report(
+                None, "t3-unit", rate, ceiling_per_market=CEILING_PER_MARKET
+            )
+            is None
+        ), rate
+
+
+def test_measured_honest_rates_from_issue_19_are_never_refused() -> None:
+    """track3-simulation-public#19. Four units of a real submission reported these single-market
+    rates, confirmed by the organizers from its events.json, and at the old 1e7 ceiling every one
+    was refused as schema_invalid and scored zero: the fastest engine lost its fastest units."""
+    for rate in (12_040_000.0, 10_470_000.0, 10_870_000.0, 10_880_000.0):
         assert (
             H.implausible_self_report(
                 None, "t3-unit", rate, ceiling_per_market=CEILING_PER_MARKET

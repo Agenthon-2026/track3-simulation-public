@@ -89,6 +89,7 @@ from typing import Any
 __all__ = [
     "ABIDES_BASELINE_EVENTS_PER_SEC",
     "COMPETITIVE_BAND_EVENTS_PER_SEC",
+    "DEV_PLAUSIBILITY_CEILING_PER_MARKET",
     "MAX_PER_MARKET_EVENTS_PER_SEC",
     "PARTICIPANT_FAILURE_SCORE",
     "VECTORIZED_REFERENCE_EVENTS_PER_SEC",
@@ -135,6 +136,22 @@ COMPETITIVE_BAND_EVENTS_PER_SEC = (150_000.0, 600_000.0)
 #: the plausibility bound this package has always published; see the module docstring for why its
 #: role changed. This is the one constant here that feeds a scored quantity.
 MAX_PER_MARKET_EVENTS_PER_SEC = 1e7
+
+#: The DEVELOPMENT plausibility ceiling on a single market's SELF-REPORTED events/sec. Read only by
+#: `scoring._developer_plausibility`, where the submission's own number is the score input and no
+#: organizer clock exists, so a self-report above it is refused as physically implausible.
+#:
+#: Separate from :data:`MAX_PER_MARKET_EVENTS_PER_SEC` because the two do different jobs. That one
+#: derives the Final clip domain, which `assert_domain_max_covers_roster` ties to the Hub's C1 plan,
+#: so raising it would force the plan up in lockstep or abort Final. This one only decides what an
+#: unofficial Development board believes.
+#:
+#: 1e7 used to serve both, derived as more than 10x the top of a competitive band that was later
+#: withdrawn as never measured. track3-simulation-public#19 then measured honest single-market rates
+#: of 10.47M to 12.04M events/sec, so 1e7 refused real submissions and scored their fastest units
+#: zero. The same rule applied to the measured top gives more than 1.2e8; 1e9 is the generous round
+#: value, per the asymmetry above, and it still refuses the reported fabrication (1e11) by 100x.
+DEV_PLAUSIBILITY_CEILING_PER_MARKET = 1e9
 
 
 def batch_width(unit_dir: str | Path) -> int:

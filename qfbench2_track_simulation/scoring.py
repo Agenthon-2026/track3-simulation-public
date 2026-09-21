@@ -492,7 +492,7 @@ def _developer_plausibility(
         pathlib.Path(ctx["unit_dir"]).name,
         self_reported,
         n_markets,
-        ceiling_per_market=domain.MAX_PER_MARKET_EVENTS_PER_SEC,
+        ceiling_per_market=domain.DEV_PLAUSIBILITY_CEILING_PER_MARKET,
     )
     if violation is not None:
         return GateResult(
