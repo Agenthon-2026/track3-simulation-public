@@ -442,8 +442,11 @@ pip install "qfbench2-common[data] @ git+https://github.com/Agenthon-2026/Agenth
 > contract matches what the scorer accepts. **This version is required, not just recommended:**
 > the scorer imports `stable_output_binding` from it at `import qfbench2_track_simulation`, so an
 > older toolkit fails with `cannot import name 'stable_output_binding'`. Reinstall the toolkit with
-> the command above before `pip install .`; the package declares `qfbench2-common>=2.4.4` so
-> `pip` names the conflict instead. Do not pin `v2.3.1`: it refuses a descriptor the
+> the command above before `pip install .`. The package declares `qfbench2-common>=2.4.4`, so with an
+> older toolkit installed `pip install .` stops first with
+> `ERROR: No matching distribution found for qfbench2-common<3,>=2.4.4` — that message means
+> "reinstall the toolkit from the git tag above", never `pip install qfbench2-common` from PyPI
+> (the name is not published there). Do not pin `v2.3.1`: it refuses a descriptor the
 > verifier accepts, demanding a non-empty `models` where the current contract allows `"models": []`. **Pin a tag rather than installing from a branch** — an unpinned toolkit is how a local
 > result and a scored result come to disagree without either side noticing.
 >
