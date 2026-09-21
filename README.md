@@ -168,11 +168,11 @@ including creation and an image pull when needed. The separate ingestion-stage c
 Simulation remains offline and receives no House allocation. The planned House timing release
 for other tracks changes neither these clocks nor Simulation's compute or network limits.
 
-See the [Development runtime guide](https://github.com/Agenthon-2026/Agenthon2026-public/blob/v2.4.3/docs/DEVELOPMENT-RUNTIME.md)
+See the [Development runtime guide](https://github.com/Agenthon-2026/Agenthon2026-public/blob/v2.4.4/docs/DEVELOPMENT-RUNTIME.md)
 for process, temporary-space and output limits. The card's `disk = "10G"` is not used by this
 launcher and does not establish a writable 10 GiB workspace. The provisional Development
 profile and shared queue do not certify official Final timing. Follow the
-[image submission guide](https://github.com/Agenthon-2026/Agenthon2026-public/blob/v2.4.3/docs/IMAGE-SUBMISSIONS.md)
+[image submission guide](https://github.com/Agenthon-2026/Agenthon2026-public/blob/v2.4.4/docs/IMAGE-SUBMISSIONS.md)
 for public pulls or an organizer-confirmed private mirror.
 
 ### Firewall
@@ -430,16 +430,23 @@ All scoring logic lives in the shared toolkit, which ships from its own public r
 Install it from there:
 
 ```bash
-# Pin toolkit v2.4.2 for the current submission commands and model-free fixture.
-# The installed package reports version 2.4.2.
-pip install "qfbench2-common[data] @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@v2.4.3#subdirectory=common"
+# Pin toolkit v2.4.4: the scorer in this repository imports from it at package import.
+# The installed package reports version 2.4.4.
+pip install "qfbench2-common[data] @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@v2.4.4#subdirectory=common"
 ```
 
 > ### Install the pinned tag, not a branch
 >
-> `Agenthon-2026/Agenthon2026-public` carries the `qfbench2-common` package, and `v2.4.2` is the
+> `Agenthon-2026/Agenthon2026-public` carries the `qfbench2-common` package, and `v2.4.4` is the
 > tag CI installs (`QFBENCH2_COMMON_REF` in `.github/workflows/ci.yml`) and the tag whose descriptor
-> contract matches what the scorer accepts. Do not pin `v2.3.1`: it refuses a descriptor the
+> contract matches what the scorer accepts. **This version is required, not just recommended:**
+> the scorer imports `stable_output_binding` from it at `import qfbench2_track_simulation`, so an
+> older toolkit fails with `cannot import name 'stable_output_binding'`. Reinstall the toolkit with
+> the command above before `pip install .`. The package declares `qfbench2-common>=2.4.4`, so with an
+> older toolkit installed `pip install .` stops first with
+> `ERROR: No matching distribution found for qfbench2-common<3,>=2.4.4` — that message means
+> "reinstall the toolkit from the git tag above", never `pip install qfbench2-common` from PyPI
+> (the name is not published there). Do not pin `v2.3.1`: it refuses a descriptor the
 > verifier accepts, demanding a non-empty `models` where the current contract allows `"models": []`. **Pin a tag rather than installing from a branch** — an unpinned toolkit is how a local
 > result and a scored result come to disagree without either side noticing.
 >
@@ -460,7 +467,7 @@ baseline image. Run every step from this repository's root. The Docker build fet
 ABIDES source and applies all four required patches in order.
 
 ```bash
-pip install "qfbench2-common[data] @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@v2.4.3#subdirectory=common"
+pip install "qfbench2-common[data] @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@v2.4.4#subdirectory=common"
 docker build --platform=linux/amd64 -t track3-abides-baseline:latest baselines/
 ```
 
