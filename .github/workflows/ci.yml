@@ -15,7 +15,7 @@ env:
   # contract set, and it is the SAME string the README's install command pins. It must stay a
   # tag and never a branch: an unpinned toolkit means a local result and a scored result can
   # diverge silently, which is the one failure mode the pin exists to prevent.
-  QFBENCH2_COMMON_REF: v2.4.2
+  QFBENCH2_COMMON_REF: v2.4.4
   # Private staging tests the coordinated candidate before public toolkit publication. The
   # candidate is the PUBLICATION candidate -- `Agenthon2026-public-staging` main, the tree the
   # next public toolkit tag is cut from -- never the private hub, whose bytes participants do

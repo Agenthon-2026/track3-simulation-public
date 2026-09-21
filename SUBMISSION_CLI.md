@@ -33,11 +33,11 @@ The unit clock includes container creation and an image pull when needed. The in
 runs units sequentially within a separate 43,200-second (12-hour) platform clock; scoring has
 its own stage clock. Simulation remains offline and receives no House allocation. The planned
 House timing change for other tracks adds no Simulation compute or network access.
-See the [Development runtime guide](https://github.com/Agenthon-2026/Agenthon2026-public/blob/v2.4.3/docs/DEVELOPMENT-RUNTIME.md)
+See the [Development runtime guide](https://github.com/Agenthon-2026/Agenthon2026-public/blob/v2.4.4/docs/DEVELOPMENT-RUNTIME.md)
 for applied limits and pending access status. Development settings do not certify Final resources.
 
 Build a `linux/amd64` image identified by its immutable digest. Follow the
-[image submission guide](https://github.com/Agenthon-2026/Agenthon2026-public/blob/v2.4.3/docs/IMAGE-SUBMISSIONS.md)
+[image submission guide](https://github.com/Agenthon-2026/Agenthon2026-public/blob/v2.4.4/docs/IMAGE-SUBMISSIONS.md)
 for anonymous public pulls and the organizer confirmation required before using a private mirror.
 A descriptor category or image-access field does not itself make a service available.
 
@@ -46,7 +46,7 @@ A descriptor category or image-access field does not itself make a service avail
 An upload is a **zip, not an image reference**. Push your `linux/amd64` image to a registry that
 allows anonymous pulls by digest (the image submission guide above), write `submission.json`
 with that digest (the sealed descriptor, see the
-[descriptor guide](https://github.com/Agenthon-2026/Agenthon2026-public/blob/v2.4.3/starter-packs/track3/SUBMISSION-DESCRIPTOR.md)),
+[descriptor guide](https://github.com/Agenthon-2026/Agenthon2026-public/blob/v2.4.4/starter-packs/track3/SUBMISSION-DESCRIPTOR.md)),
 then let the toolkit seal and pack it:
 
 ```bash
@@ -55,7 +55,7 @@ qfbench2 submission pack --descriptor submission.json --team-number <your team n
 
 `pack` asks for your Team Key on a hidden prompt, derives your `team_id`, and writes
 `submission.zip` containing `submission.json` and `team-claim.json` -- the
-[team-claim guide](https://github.com/Agenthon-2026/Agenthon2026-public/blob/v2.4.3/starter-packs/track3/TEAM-CLAIM.md)
+[team-claim guide](https://github.com/Agenthon-2026/Agenthon2026-public/blob/v2.4.4/starter-packs/track3/TEAM-CLAIM.md)
 explains the claim and what happens when it is wrong. Upload `submission.zip` on this track's
 CodaBench competition page from your team's designated CodaBench account; the page link was
 issued to registered teams at the Development opening and is in the participant announcements.
@@ -73,7 +73,7 @@ Development runs through **October 12, 2026**. The joint **Final + Verification 
 October 13–25, 2026**. Each team makes **one final submission per track**; organizers perform
 verification within that same phase, with no separate participant Verification submission.
 Registration and Development close together on October 12, 2026 at **23:59 Anywhere on Earth (AoE, UTC−12)**. The joint Final + Verification phase closes on October 25, 2026 at **23:59 AoE**. Other competition dates and task/data cutoffs are unchanged.
-See the [Development submission limits](https://github.com/Agenthon-2026/Agenthon2026-public/blob/v2.4.3/docs/DEVELOPMENT-RUNTIME.md#submission-limits-at-the-development-opening).
+See the [Development submission limits](https://github.com/Agenthon-2026/Agenthon2026-public/blob/v2.4.4/docs/DEVELOPMENT-RUNTIME.md#submission-limits-at-the-development-opening).
 
 ## Network modes (per unit card, `[environment].network`)
 
