@@ -147,8 +147,8 @@ def implausible_self_report(
     unit, its number is used and the submission's claim is not load-bearing.
 
     ``ceiling_per_market`` is passed in rather than defined here so exactly one definition of the
-    physical ceiling exists in the package — :data:`qfbench2_track_simulation.domain.
-    MAX_PER_MARKET_EVENTS_PER_SEC`. This module stays stdlib-only and file-loadable as a result.
+    ceiling exists in the package — :data:`qfbench2_track_simulation.domain.
+    DEV_PLAUSIBILITY_CEILING_PER_MARKET`. This module stays stdlib-only and file-loadable as a result.
 
     ``n_markets`` scales the ceiling for batch units, which rank on the AGGREGATE events/sec across
     the whole batch: a legitimate wide-batch submission running N markets in parallel can report

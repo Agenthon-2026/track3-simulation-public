@@ -125,6 +125,10 @@ The `events_per_sec` value must be consistent with `n_events ÷ wall_clock_sec` 
 ±5%. The harness verifies this consistency check and disqualifies submissions that report
 inflated throughput.
 
+On the Development board, where your own `events_per_sec` is the score input, a single-market
+rate above 1e9 events/sec is refused as implausible; for a batch unit the bound is multiplied by
+its number of markets. This applies to the Development board only.
+
 ### `message_trace.parquet`
 
 A message-level record of the kernel's inter-agent message ledger. It feeds the
