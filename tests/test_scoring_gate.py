@@ -105,7 +105,7 @@ def official_ctx(root: Path, **record_over: object) -> dict[str, object]:
         "output_dir": out,
         "unit_handle": F.UNIT_HANDLE,
         "plan": F.plan(),
-        "run_record": F.run_record(**record_over),  # type: ignore[arg-type]
+        "run_record": F.bind_output(F.run_record_mapping(**record_over), unit, out),
     }
 
 
@@ -203,6 +203,7 @@ def test_a_corrupt_candidate_parquet_fails_one_unit_and_does_not_escape(tmp_path
     (out / "events.json").write_text(
         json.dumps(_events(N_ROWS, 1.5, _sha(out / "trace.parquet")))
     )
+    ctx["run_record"] = F.bind_output(dict(ctx["run_record"].raw), Path(ctx["unit_dir"]), out)
     verdict = build_verifier(ctx).run(ctx)
     assert not verdict.admissible
     assert FailureLabel.T3_PARSE_ERROR in verdict.labels
@@ -292,7 +293,7 @@ def test_a_missing_candidate_ledger_is_refused_when_the_card_requires_one(
     (Path(ctx["output_dir"]) / "message_trace.parquet").unlink()  # type: ignore[arg-type]
     verdict = build_verifier(ctx).run(ctx)
     assert not verdict.admissible
-    assert FailureLabel.T3_LATENCY_CAUSALITY_VIOLATION in verdict.labels
+    assert FailureLabel.T3_SEMANTIC_REGRESSION in verdict.labels
 
 
 def test_a_card_can_waive_the_ledger_and_the_unit_still_scores(tmp_path: Path) -> None:
@@ -306,6 +307,9 @@ def test_a_card_can_waive_the_ledger_and_the_unit_still_scores(tmp_path: Path) -
     unit.joinpath("message_trace.parquet").unlink()
     Path(ctx["output_dir"]).joinpath("message_trace.parquet").unlink()  # type: ignore[arg-type]
     ctx.pop("_t3_card", None)
+    ctx["run_record"] = F.bind_output(
+        dict(ctx["run_record"].raw), unit, Path(ctx["output_dir"])
+    )
     verdict = build_verifier(ctx).run(ctx)
     assert verdict.admissible, verdict.gate_results
 

@@ -1,357 +1,313 @@
-"""The ranked rate comes from trusted C2 evidence, or it does not exist.
+"""## Executive summary (read this first)
 
-The defect this file pins closed: ``host_metrics.resolve()`` fell back to
-``float(self_reported)`` when no harness measurement existed, and none ever existed, because the
-common ingestion path never wrote the handoff. The consistency checks pinned
-``events_per_sec == n_events / wall_clock_sec`` and pinned ``n_events`` to the real trace rows —
-but ``wall_clock_sec`` came from the submission and was compared against nothing, so a
-self-consistent triple with a shrunken clock passed every gate at an arbitrary rank.
-
-Each test below fails on the pre-fix code for a stated reason.
-
-    python -m pytest tests/test_telemetry_binding.py
+Official Track 3 timing requires signed host evidence and stable repeated file bytes.
+These synthetic tests use real sanitized parquet trees whose measured sidecars vary.
+They distinguish missing organizer evidence from participant divergence, including warmups.
+Development signatures exercise the contract only; these are not real worker measurements.
 """
 
 from __future__ import annotations
 
+import copy
+import hashlib
 import json
 import sys
-import tempfile
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import pandas as pd
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _contract_fixtures as F
+from qfbench2_common.contracts import ContractError, OrganizerFault, ParticipantFailure, RunRecord
+from qfbench2_common.contracts import stable_output_binding
+from qfbench2_common.contracts.fixtures import dev_trust_store
+from qfbench2_common.contracts.signing import SignatureUnverifiable
+from qfbench2_common.sanitize import materialize_tree
+from qfbench2_track_simulation import telemetry as T
+from qfbench2_track_simulation.limits import allowed_paths_for, stable_repeat_policy_for
 
-import _contract_fixtures as F  # noqa: E402
-import pandas as pd  # noqa: E402
-import pytest  # noqa: E402
-from qfbench2_common.contracts import OrganizerFault, ParticipantFailure  # noqa: E402
-from qfbench2_common.sanitize import materialize_tree  # noqa: E402
-
-from qfbench2_track_simulation import telemetry as T  # noqa: E402
-from qfbench2_track_simulation.limits import allowed_paths_for  # noqa: E402
-
-REPO = Path(__file__).resolve().parent.parent
-
-N = 72_061
+N = 3
 
 
-def _expect(exc_type, fn, *args, **kwargs):
-    try:
-        fn(*args, **kwargs)
-    except exc_type as exc:
-        return exc
-    raise AssertionError(f"expected {exc_type.__name__}, nothing raised")
-
-
-# --------------------------------------------------------------------------- positive control
-def test_a_clean_record_produces_the_host_measured_rate() -> None:
-    """The positive control. A gate that rejects the legitimate case makes every rejection
-    beside it uninterpretable, so this one runs first."""
-    timing = T.ranked_timing(F.run_record(), F.plan(), reference_event_count=N)
-    assert timing.rankable is True
-    assert timing.profile == T.PROFILE_OFFICIAL
-    assert timing.n_events == N
-    assert timing.measured_repeats == 4  # 5 repeats, 1 warm-up discarded
-    assert abs(timing.events_per_sec - N / 1.0) < 1e-9
-
-
-# --------------------------------------------------------------------------- the headline
-def test_no_telemetry_means_no_score_not_a_self_reported_score() -> None:
-    """Pre-fix: `resolve(None, unit, self_reported)` returned the submission's number. Now it is
-    an organizer fault, because a missing measurement is missing evidence, not a low result."""
-    record = F.run_record(telemetry=None)
-    exc = _expect(OrganizerFault, T.ranked_timing, record, F.plan(), reference_event_count=N)
-    assert "telemetry_absent" in str(exc)
-
-
-def test_a_participant_file_shaped_like_the_handoff_cannot_become_the_score() -> None:
-    """A ``host_metrics.json`` planted in the output tree is not C2 and never reaches the rate.
-
-    C2 exists only as a Runner-signed artifact in the organizer control root, so there is no
-    filesystem path by which participant bytes are promoted. Asserted structurally: the ranked
-    number is computed from the record alone, and a lookalike file in the output directory changes
-    nothing about it."""
-    with tempfile.TemporaryDirectory() as tmp:
-        planted = Path(tmp) / "host_metrics.json"
-        planted.write_text(
-            json.dumps({F.UNIT_HANDLE: {"host_events_per_sec": 9.9e8}})
-        )
-        timing = T.ranked_timing(F.run_record(), F.plan(), reference_event_count=N)
-    assert timing.events_per_sec < 1e6, "a planted lookalike must not influence the ranked rate"
-    assert T.ranked_timing.__module__ == "qfbench2_track_simulation.telemetry"
-
-
-# --------------------------------------------------------------------------- telemetry quality
-def test_low_coverage_is_refused() -> None:
-    record = F.run_record(telemetry=F.telemetry_block(samples_taken=4000, samples_missed=1040))
-    exc = _expect(OrganizerFault, T.ranked_timing, record, F.plan(), reference_event_count=N)
-    assert "coverage_fraction" in str(exc)
-
-
-def test_a_wrong_sampling_interval_is_refused() -> None:
-    record = F.run_record(telemetry=F.telemetry_block(sampling_interval_ms=200))
-    exc = _expect(OrganizerFault, T.ranked_timing, record, F.plan(), reference_event_count=N)
-    assert "sampling_interval_ms" in str(exc)
-
-
-def test_device_index_only_telemetry_is_inadmissible() -> None:
-    """C2 refuses an index in `gpu_uuid` outright; a null UUID reaches our gate and is refused
-    there. Either way there is no route by which an index-attributed sample ranks."""
-    record = F.run_record(telemetry=F.telemetry_block(gpu_uuid=None))
-    exc = _expect(OrganizerFault, T.ranked_timing, record, F.plan(), reference_event_count=N)
-    assert "UUID" in str(exc)
-
-
-def test_missing_cgroup_attribution_is_refused() -> None:
-    """Refused twice, at two layers, on purpose.
-
-    C2 parsing rejects an empty ``participant_cgroup_id`` outright, so a record without cgroup
-    attribution never reaches Track 3. The gate checks it as well, because the layer that refuses
-    first today is not guaranteed to be the layer that refuses first tomorrow.
-    """
-    from qfbench2_common.contracts import ContractError
-
-    _expect(
-        ContractError,
-        F.run_record,
-        telemetry=F.telemetry_block(participant_cgroup_id=""),
+def case(root: Path, *, batch=False, ledger_required=True):
+    unit = root / "unit"
+    unit.mkdir(parents=True)
+    card = ('[task]\nscenario_family = "matching-engine-semantics"\n'
+            '[scoring.params]\nrequires_message_ledger = ' + str(ledger_required).lower())
+    if batch:
+        card += '\n[batch]\nbatch = true\n'
+    (unit / "card.toml").write_text(card)
+    names = ["sub_00", "sub_01"] if batch else [""]
+    subs = []
+    for name in names:
+        scenario = unit / "scenarios" / f"{name}.json" if batch else unit / "scenario.json"
+        scenario.parent.mkdir(exist_ok=True)
+        scenario.write_text(json.dumps({"scenario_id": "synthetic" + name, "seed": 7}))
+        if batch:
+            subs.append({"sub": name, "scenario_file": f"scenarios/{name}.json", "n_events": N})
+    if batch:
+        (unit / "batch.json").write_text(json.dumps({"n": len(names), "subs": subs}))
+    trees, tree_digests, bindings = [], [], []
+    counts = {f"{name}/trace.parquet" if name else "trace.parquet": N for name in names}
+    for index in range(5):
+        out = root / f"raw-{index}"
+        out.mkdir()
+        wall = 1.0 + index * 0.000001
+        for name in names:
+            where = out / name
+            where.mkdir(exist_ok=True)
+            frame = pd.DataFrame({"t_ns": [1, 2, 3], "value": [1.0, 2.0, 3.0]})
+            frame.to_parquet(where / "trace.parquet", index=False)
+            if ledger_required or batch:
+                frame.to_parquet(where / "message_trace.parquet", index=False)
+            (where / "events.json").write_text(json.dumps({
+                "scenario_id": "synthetic" + name, "seed": 7, "n_events": N,
+                "wall_clock_sec": wall, "events_per_sec": N / wall,
+                "trace_sha256": hashlib.sha256((where / "trace.parquet").read_bytes()).hexdigest(),
+            }))
+        if batch:
+            (out / "batch_events.json").write_text(json.dumps({
+                "total_events": N * len(names), "wall_clock_sec": wall,
+                "events_per_sec": N * len(names) / wall,
+                "per_scenario": [{"sub": name, "n_events": N} for name in names],
+            }))
+        retained = root / f"retained-{index}"
+        result = materialize_tree(out, retained, allowed_paths=allowed_paths_for(unit))
+        assert not result.rejections
+        trees.append(retained)
+        tree_digests.append(result.tree_digest())
+        bindings.append(stable_output_binding(retained, **stable_repeat_policy_for(unit)))
+    raw = F.run_record_mapping(
+        n_events=N * len(names), row_counts=counts, repeat_digests=tree_digests,
+        tree_digest=tree_digests[-1],
     )
-    admissible, reasons = _telemetry_reasons(participant_cgroup_id="")
-    assert not admissible and any("cgroup" in r for r in reasons), reasons
+    for repeat, binding in zip(raw["repeats"], bindings):
+        repeat["stable_output_binding"] = binding
+    return {"unit": unit, "out": trees[-1], "trees": trees, "raw": raw, "plan": F.plan(),
+            "count": N * len(names)}
 
 
-def _telemetry_reasons(**over: object) -> tuple[bool, tuple[str, ...]]:
-    """Ask the shared helper directly, bypassing C2's own stricter parse."""
-    from qfbench2_common.contracts import telemetry_admissible_for_timing
-
-    class _Fake:
-        telemetry = dict(F.telemetry_block())
-        telemetry.update(over)
-
-    return telemetry_admissible_for_timing(
-        _Fake(),  # type: ignore[arg-type]
-        min_coverage=T.MIN_COVERAGE_FRACTION,
-        sampling_interval_ms=T.SAMPLING_INTERVAL_MS,
-        max_consecutive_missed=T.MAX_CONSECUTIVE_MISSED_SAMPLES,
+def timing(data, *, sign=True, **kwargs):
+    raw = copy.deepcopy(data["raw"])
+    record = F.signed_record(raw) if sign else RunRecord.from_mapping(raw)
+    return T.ranked_timing(
+        record, data["plan"], unit_dir=data["unit"], output_dir=data["out"],
+        reference_event_count=data["count"], **kwargs,
     )
 
 
-def test_a_contended_or_throttled_box_is_refused() -> None:
-    """Track 3's fairness rule is 'same pinned, otherwise-idle instance'. A rate measured next to
-    another workload ranks the scheduler."""
-    for block, needle in (
-        (F.telemetry_block(exclusive=False), "not exclusive"),
-        (F.telemetry_block(contender_process_count=3), "contender"),
-        (F.telemetry_block(throttled=True), "throttling"),
-    ):
-        record = F.run_record(telemetry=block)
-        exc = _expect(OrganizerFault, T.ranked_timing, record, F.plan(), reference_event_count=N)
-        assert needle in str(exc), (needle, str(exc))
+def test_an_honest_submission_is_not_refused_for_reporting_its_real_wall_clock(tmp_path):
+    data = case(tmp_path)
+    assert len({r["output_tree_digest"] for r in data["raw"]["repeats"]}) == 5
+    assert len({r["stable_output_binding"]["content_digest"] for r in data["raw"]["repeats"]}) == 1
+    record = F.signed_record(copy.deepcopy(data["raw"]))
+    record.verify_attestation(dev_trust_store(), require_production_trust=False)
+    got = timing(data)
+    assert got.rankable and got.profile == "official"
+    assert got.n_events == N and got.measured_repeats == 4
+    assert got.events_per_sec == N
 
 
-# --------------------------------------------------------------------------- repeats
-def test_every_repeat_is_validated_not_only_the_last() -> None:
-    """Pre-fix: only the final repeat's output was retained and checked, while the median ran over
-    every repeat. An alternating fast-invalid / slow-valid submission was invisible unless the
-    invalid repeat happened to be last. Here the FIRST measured repeat diverges and the last three
-    are clean, and it still fails."""
-    record = F.run_record(
-        elapsed_per_repeat=[1.4, 0.01, 1.0, 1.0, 1.0],
-        repeat_digests=[F.TREE_DIGEST, F.OTHER_TREE_DIGEST] + [F.TREE_DIGEST] * 3,
-    )
-    exc = _expect(ParticipantFailure, T.ranked_timing, record, F.plan(), reference_event_count=N)
-    assert "different output tree" in str(exc)
+def test_self_report_and_planted_handoff_cannot_change_rank(tmp_path):
+    data = case(tmp_path)
+    (data["out"].parent / "host_metrics.json").write_text('{"events_per_sec": 990000000}')
+    path = data["out"] / "events.json"
+    raw = json.loads(path.read_text())
+    raw.update(wall_clock_sec=0.000001, events_per_sec=N / 0.000001)
+    path.write_text(json.dumps(raw))
+    assert timing(data).events_per_sec == N
 
 
-def test_alternating_fast_invalid_repeats_fail_in_either_order() -> None:
-    for digests in (
-        [F.TREE_DIGEST, F.OTHER_TREE_DIGEST, F.TREE_DIGEST, F.OTHER_TREE_DIGEST, F.TREE_DIGEST],
-        [F.TREE_DIGEST, F.TREE_DIGEST, F.TREE_DIGEST, F.TREE_DIGEST, F.OTHER_TREE_DIGEST],
-    ):
-        record = F.run_record(repeat_digests=digests)
-        _expect(ParticipantFailure, T.ranked_timing, record, F.plan(), reference_event_count=N)
+@pytest.mark.parametrize("over,match", [
+    (None, "telemetry_absent"),
+    ({"samples_taken": 4000, "samples_missed": 1040}, "coverage_fraction"),
+    ({"sampling_interval_ms": 200}, "sampling_interval_ms"),
+    ({"gpu_uuid": None}, "UUID"),
+    ({"exclusive": False}, "not exclusive"),
+    ({"contender_process_count": 3}, "contender"),
+    ({"throttled": True}, "throttling"),
+])
+def test_unestablished_host_controls_are_organizer_faults(tmp_path, over, match):
+    data = case(tmp_path)
+    data["raw"]["telemetry"] = None if over is None else F.telemetry_block(**over)
+    with pytest.raises(OrganizerFault, match=match):
+        timing(data)
 
 
-def _honest_repeat_tree(root: Path, *, wall_clock_sec: float) -> str:
-    """Write a well-formed output tree and return the REAL digest the Runner would record.
-
-    Identical in every respect across calls except `wall_clock_sec`, which is what an honest
-    submission reports and cannot hold constant.
-    """
-    out = root / "out"
-    out.mkdir(parents=True)
-    frame = pd.DataFrame(
-        {
-            "t_ns": [1, 2, 3],
-            "msg_type": ["ORDER_SUBMITTED", "ORDER_FILLED", "QUOTE_UPDATE"],
-            "order_id": [0, 1, 2],
-            "agent_id": [1, 1, 2],
-            "side": ["BUY", "SELL", "BUY"],
-            "price": [10, 11, 12],
-            "size": [1, 1, 1],
-        }
-    )
-    frame.to_parquet(out / "trace.parquet")
-    frame.to_parquet(out / "message_trace.parquet")
-    (out / "events.json").write_text(
-        json.dumps(
-            {
-                "scenario_id": "synthetic",
-                "n_events": 3,
-                "seed": 7,
-                "trace_sha256": "0" * 64,
-                "wall_clock_sec": wall_clock_sec,
-                "events_per_sec": 3.0 / wall_clock_sec,
-            }
-        ),
-        encoding="utf-8",
-    )
-    unit = REPO / "units" / "t3-s001-price-time-priority"
-    result = materialize_tree(
-        out, root / "staging", allowed_paths=allowed_paths_for(unit)
-    )
-    assert not result.rejections, result.rejections
-    return result.tree_digest()
+def test_missing_cgroup_attribution_is_refused_by_parser():
+    with pytest.raises(ContractError):
+        F.run_record(telemetry=F.telemetry_block(participant_cgroup_id=""))
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "track3-simulation-public#5 / Agenthon2026#116. The repeat check compares a byte digest "
-        "of the WHOLE output tree, events.json is inside that tree, and events.json must carry a "
-        "real wall_clock_sec. So an honest submission diverges on every repeat and is refused. "
-        "Track 3 cannot repair this alone: C2 carries one opaque digest per repeat and the repeat "
-        "key set is closed, so there is nothing to recompute a narrower digest from. When the "
-        "producer digests only limits.STABLE_OUTPUT_FILES this test XPASSes and the marker goes."
-    ),
-)
-def test_an_honest_submission_is_not_refused_for_reporting_its_real_wall_clock() -> None:
-    """THE acceptance test, and the one the suite never had.
-
-    Every other digest in this module is the placeholder `F.TREE_DIGEST`, handed to each repeat by
-    the fixture, so the positive controls pass by construction regardless of what is on disk. The
-    suite therefore asserted this defect was absent by assuming it. Here both digests are real,
-    produced by `materialize_tree` over two trees that differ only in the timing field an honest
-    submission has no choice but to vary.
-    """
-    with tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second:
-        scored = _honest_repeat_tree(Path(first), wall_clock_sec=1.000000)
-        repeat = _honest_repeat_tree(Path(second), wall_clock_sec=1.000001)
-
-    # One microsecond of honest measurement, and the trees no longer hash alike.
-    assert scored != repeat, (
-        "precondition failed: the two trees hashed identically, so this test cannot "
-        "demonstrate anything"
-    )
-
-    record = F.run_record(
-        n_events=3,
-        tree_digest=scored,
-        repeat_digests=[scored, repeat, repeat, repeat, repeat],
-        repeat_events=[3] * 5,
-        row_counts={"trace.parquet": 3},
-    )
-    timing = T.ranked_timing(record, F.plan(), reference_event_count=3)
-    assert timing.rankable is True
+@pytest.mark.parametrize("index", [0, 1, 4])
+@pytest.mark.parametrize("field", ["content_digest", "event_count"])
+def test_every_repeat_including_warmups_must_reproduce_scored_content(tmp_path, index, field):
+    data = case(tmp_path)
+    repeat = data["raw"]["repeats"][index]
+    if field == "content_digest":
+        repeat["stable_output_binding"][field] = F.OTHER_TREE_DIGEST
+    else:
+        repeat[field] += 1
+    with pytest.raises(ParticipantFailure, match="Every repeat"):
+        timing(data)
 
 
-def test_a_repeat_with_a_different_event_count_fails() -> None:
-    record = F.run_record(repeat_events=[N, N, N + 1, N, N])
-    exc = _expect(ParticipantFailure, T.ranked_timing, record, F.plan(), reference_event_count=N)
-    assert "different event count" in str(exc)
+@pytest.mark.parametrize("filename", ["trace.parquet", "message_trace.parquet"])
+def test_retained_semantic_bytes_are_recomputed(tmp_path, filename):
+    data = case(tmp_path)
+    (data["out"] / filename).write_bytes(b"changed semantic content")
+    with pytest.raises(ParticipantFailure, match="different stable output"):
+        timing(data)
 
 
-def test_the_repeat_count_is_the_plan_s_commitment_not_what_was_observed() -> None:
-    record = F.run_record(elapsed_per_repeat=[1.4, 1.0])  # only two repeats recorded
-    exc = _expect(OrganizerFault, T.ranked_timing, record, F.plan(), reference_event_count=N)
-    assert "pre-commitment" in str(exc)
+@pytest.mark.parametrize("mutation", ["missing", "wrong_policy", "unsigned", "retention"])
+def test_missing_or_incompatible_producer_evidence_is_not_charged_to_participant(tmp_path, mutation):
+    data = case(tmp_path)
+    repeat = data["raw"]["repeats"][0]
+    if mutation == "missing":
+        del repeat["stable_output_binding"]
+    elif mutation == "wrong_policy":
+        repeat["stable_output_binding"]["policy_digest"] = F.OTHER_TREE_DIGEST
+    elif mutation == "retention":
+        data["raw"]["bindings"]["sanitized_tree_digest"] = F.OTHER_TREE_DIGEST
+    else:
+        # Retain a signature made before these new bindings existed.
+        old = copy.deepcopy(data["raw"])
+        for r in old["repeats"]:
+            del r["stable_output_binding"]
+        data["raw"]["attestation"] = F.signed_record(old).raw["attestation"]
+    with pytest.raises(OrganizerFault):
+        timing(data, sign=mutation != "unsigned")
 
 
-def test_an_unrankable_repeat_is_an_organizer_fault() -> None:
-    record = F.run_record(repeat_rankable=[True, True, False, True, True])
-    exc = _expect(OrganizerFault, T.ranked_timing, record, F.plan(), reference_event_count=N)
-    assert "not rankable" in str(exc)
+def test_crypto_verification_detects_binding_added_after_signature(tmp_path):
+    data = case(tmp_path)
+    signed = F.signed_record(copy.deepcopy(data["raw"]))
+    raw = copy.deepcopy(signed.raw)
+    raw["repeats"][0]["stable_output_binding"]["content_digest"] = F.OTHER_TREE_DIGEST
+    with pytest.raises(SignatureUnverifiable):
+        RunRecord.from_mapping(raw).verify_attestation(dev_trust_store(), require_production_trust=False)
 
 
-def test_the_warm_up_repeat_is_excluded_from_the_median() -> None:
-    """The warm-up is slow by construction; including it would drag the median down."""
-    record = F.run_record(elapsed_per_repeat=[10.0, 1.0, 1.0, 1.0, 1.0])
-    timing = T.ranked_timing(record, F.plan(), reference_event_count=N)
-    assert abs(timing.elapsed_sec_median - 1.0) < 1e-9
+def test_legacy_record_remains_parseable_but_cannot_rank_under_new_profile(tmp_path):
+    data = case(tmp_path)
+    for repeat in data["raw"]["repeats"]:
+        del repeat["stable_output_binding"]
+    F.signed_record(copy.deepcopy(data["raw"]))
+    with pytest.raises(OrganizerFault, match="signed stable-output"):
+        timing(data)
 
 
-# --------------------------------------------------------------------------- the numerator
-def test_the_numerator_comes_from_c2_not_from_the_track() -> None:
-    """Frozen ruling R-3: the Runner measures the parquet-footer row count. A track may not
-    measure its own ranking numerator."""
-    record = F.run_record(row_counts={})
-    exc = _expect(OrganizerFault, T.ranked_timing, record, F.plan(), reference_event_count=N)
-    assert "output_row_counts" in str(exc)
+@pytest.mark.parametrize("kind", ["count", "rankability", "clock", "warmup_clock", "footer"])
+def test_missing_or_invalid_host_measurements_abort(tmp_path, kind):
+    data = case(tmp_path)
+    if kind == "count":
+        data["raw"]["repeats"].pop()
+    elif kind == "rankability":
+        data["raw"]["repeats"][0]["rankability"] = {"state": "unrankable", "unmet_controls": ["telemetry_absent"]}
+    elif kind == "clock":
+        data["raw"]["repeats"][1]["elapsed_sec"] = 0.0
+    elif kind == "warmup_clock":
+        data["raw"]["repeats"][0]["elapsed_sec"] = 0.0
+    else:
+        data["raw"]["output_row_counts"] = {}
+    with pytest.raises(OrganizerFault):
+        timing(data)
 
 
-def test_a_padded_trace_is_refused_at_the_numerator() -> None:
-    """Extra rows raise events/sec. Refusing them here is independent of the semantic gate that
-    also refuses them, so neither is load-bearing alone."""
-    record = F.run_record(n_events=2 * N)
-    exc = _expect(ParticipantFailure, T.ranked_timing, record, F.plan(), reference_event_count=N)
-    assert "deterministic reference" in str(exc)
+def test_warmup_is_validated_but_excluded_from_rate(tmp_path):
+    data = case(tmp_path)
+    data["raw"]["repeats"][0]["elapsed_sec"] = 1000.0
+    assert timing(data).elapsed_sec_median == 1.0
 
 
-def test_a_truncated_trace_is_refused_at_the_numerator() -> None:
-    record = F.run_record(n_events=N // 2)
-    _expect(ParticipantFailure, T.ranked_timing, record, F.plan(), reference_event_count=N)
+@pytest.mark.parametrize("count", [N - 1, N + 1])
+def test_numerator_is_bound_to_reference_not_participant_claim(tmp_path, count):
+    data = case(tmp_path)
+    data["raw"]["output_row_counts"]["trace.parquet"] = count
+    with pytest.raises(ParticipantFailure, match="deterministic reference"):
+        timing(data)
 
 
-def test_a_batch_sums_only_the_declared_subs() -> None:
-    """A submission cannot enlarge the numerator by emitting extra sub-directories: the sub list
-    comes from the organizer's batch.json."""
-    record = F.run_record(
-        row_counts={
-            "sub_00/trace.parquet": 100,
-            "sub_01/trace.parquet": 200,
-            "sub_99/trace.parquet": 10_000_000,  # not declared
-        },
-        repeat_events=[300] * 5,
-    )
-    timing = T.ranked_timing(
-        record, F.plan(), reference_event_count=300, sub_names=["sub_00", "sub_01"]
-    )
-    assert timing.n_events == 300
+def test_batch_policy_covers_all_declared_subs_and_does_not_accept_narrowing(tmp_path):
+    data = case(tmp_path, batch=True)
+    data["raw"]["output_row_counts"]["sub_99/trace.parquet"] = 1_000_000
+    assert timing(data).n_events == 2 * N
+    with pytest.raises(OrganizerFault, match="scope"):
+        timing(data, sub_names=["sub_00"])
+    (data["out"] / "sub_01" / "trace.parquet").unlink()
+    del data["raw"]["output_row_counts"]["sub_01/trace.parquet"]
+    with pytest.raises(ParticipantFailure, match="required stable artifacts"):
+        timing(data)
 
 
-# --------------------------------------------------------------------------- malformed / faults
-def test_a_non_positive_host_wall_clock_is_an_organizer_fault() -> None:
-    """The clock is ours. A zero elapsed is our instrument failing, not a participant result —
-    and it is precisely the value a self-reported path would have turned into an infinite rate."""
-    record = F.run_record(elapsed_per_repeat=[1.4, 0.0, 1.0, 1.0, 1.0])
-    exc = _expect(OrganizerFault, T.ranked_timing, record, F.plan(), reference_event_count=N)
-    assert "HOST-measured" in str(exc)
+def test_optional_ledger_absence_is_allowed_but_presence_is_bound(tmp_path):
+    data = case(tmp_path, ledger_required=False)
+    assert timing(data).rankable
+    (data["out"] / "message_trace.parquet").write_bytes(b"additional optional ledger")
+    with pytest.raises(ParticipantFailure, match="stable output"):
+        timing(data)
 
 
-def test_a_malformed_repeat_block_is_refused_by_the_contract() -> None:
-    """Malformed input case: C2 parsing itself refuses a repeat array that is out of order, so a
-    hand-edited record cannot reach the ranking code at all."""
-    mapping = F.run_record_mapping()
-    mapping["repeats"][2]["index"] = 4
-    from qfbench2_common.contracts import ContractError, RunRecord
-
-    _expect(ContractError, RunRecord.from_mapping, mapping)
-
-
-def _run_all() -> int:
-    tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
-    failed = 0
-    for t in tests:
-        try:
-            t()
-            print(f"PASS {t.__name__}")
-        except AssertionError as e:
-            failed += 1
-            print(f"FAIL {t.__name__}: {e}")
-    print(f"\n{len(tests) - failed}/{len(tests)} passed")
-    return 1 if failed else 0
+@pytest.mark.parametrize("field,value", [
+    ("scenario_id", "wrong"), ("seed", -1), ("trace_sha256", "0" * 64),
+    ("n_events", N + 1), ("wall_clock_sec", float("nan")),
+    ("events_per_sec", float("inf")), ("wall_clock_sec", -1),
+    ("events_per_sec", 900), ("n_events", True),
+])
+def test_every_repeat_sidecar_has_reusable_structural_validation(tmp_path, field, value):
+    data = case(tmp_path, batch=True)
+    first = data["trees"][0]
+    sidecar = first / "sub_00" / "events.json"
+    raw = json.loads(sidecar.read_text())
+    raw[field] = value
+    sidecar.write_text(json.dumps(raw))
+    # The producer must call this on the warmup too, not only the retained last output.
+    with pytest.raises(ParticipantFailure):
+        T.validate_repeat_sidecars(data["unit"], first, data["raw"]["output_row_counts"])
 
 
-if __name__ == "__main__":
-    raise SystemExit(_run_all())
+def test_missing_or_corrupt_batch_sidecar_is_participant_failure(tmp_path):
+    data = case(tmp_path, batch=True)
+    (data["out"] / "batch_events.json").write_text('{"per_scenario": []}')
+    with pytest.raises(ParticipantFailure):
+        timing(data)
+
+
+def test_missing_organizer_scenario_is_organizer_fault(tmp_path):
+    data = case(tmp_path)
+    (data["unit"] / "scenario.json").unlink()
+    with pytest.raises(OrganizerFault, match="organizer repeat scenarios"):
+        timing(data)
+
+
+def test_out_of_order_repeat_is_refused_by_contract():
+    raw = F.run_record_mapping()
+    raw["repeats"][2]["index"] = 4
+    with pytest.raises(ContractError):
+        RunRecord.from_mapping(raw)
+
+
+@pytest.mark.parametrize("mutation", ["missing_card", "mismatched_batch", "duplicate_sub", "escaping_sub"])
+def test_malformed_organizer_policy_is_never_a_participant_fault(tmp_path, mutation):
+    data = case(tmp_path, batch=True)
+    if mutation == "missing_card":
+        (data["unit"] / "card.toml").unlink()
+    elif mutation == "mismatched_batch":
+        (data["unit"] / "batch.json").unlink()
+    else:
+        path = data["unit"] / "batch.json"
+        raw = json.loads(path.read_text())
+        raw["subs"][1]["sub"] = raw["subs"][0]["sub"] if mutation == "duplicate_sub" else "../outside"
+        path.write_text(json.dumps(raw))
+    with pytest.raises(OrganizerFault):
+        stable_repeat_policy_for(data["unit"])
+
+
+def test_in_memory_binding_cannot_escape_attested_payload(tmp_path):
+    data = case(tmp_path)
+    record = F.signed_record(copy.deepcopy(data["raw"]))
+    record.repeats[0]["stable_output_binding"]["content_digest"] = F.OTHER_TREE_DIGEST
+    with pytest.raises(OrganizerFault, match="attested record"):
+        T.ranked_timing(record, data["plan"], unit_dir=data["unit"], output_dir=data["out"])

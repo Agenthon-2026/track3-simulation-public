@@ -53,6 +53,7 @@ from qfbench2_common.verifier import Gate, GateResult, HierarchicalVerifier
 
 from qfbench2_track_simulation import batch as _batch
 from qfbench2_track_simulation import domain, host_metrics, semantics, telemetry
+from qfbench2_track_simulation.limits import requires_message_ledger
 
 #: The scorer version, SHARED BY ALL FOUR TRACKS and bumped together (owner ruling 2026-09-11).
 #:
@@ -89,18 +90,6 @@ _FAMILY_NUM: dict[str, int] = {
     "exchange-protocol": 7,  # MP / GPU-LOB-Core: Layer-2 exchange responses (g3.5). Tier-A via card.
     "reactive-agent": 8,  # RA: endogenous reaction to a scheduled intervention. Tier-A (see TIER_A_FAMILIES) + mandatory ledger.
 }
-
-#: Families whose single-market units carry a message ledger unless the card says otherwise.
-#:
-#: This is the DEFAULT behind the card's ``requires_message_ledger`` key, not a substitute for it.
-#: The rule it replaces was "run the ledger gate when the reference directory happens to contain
-#: message_trace.parquet", which means failing to ship a reference ledger silently switches the
-#: JAX-resistance gate off for that unit — an invisible failure pointing the wrong way. Measured at
-#: `origin/main`: every single-market public unit ships one except the throughput-scale worked
-#: exemplar, so family 6 defaults to not-required and everything else defaults to required. An
-#: unrecognised family defaults to REQUIRED, because the fail-closed direction is to ask for the
-#: evidence.
-_LEDGER_OPTIONAL_FAMILIES: frozenset[int] = frozenset({6})
 
 _REQUIRED_EVENTS: frozenset[str] = frozenset(
     {
@@ -231,11 +220,7 @@ class _CardPolicy:
             params.get("kendall_tau_floor", semantics.DEFAULT_KENDALL_TAU_FLOOR)
         )
         self.spread_bps_tolerance = float(params.get("spread_bps_tolerance", 10.0))
-        declared = params.get("requires_message_ledger")
-        if isinstance(declared, bool):
-            self.requires_message_ledger = declared
-        else:
-            self.requires_message_ledger = self.family not in _LEDGER_OPTIONAL_FAMILIES
+        self.requires_message_ledger = requires_message_ledger(card)
 
 
 def _card_policy(ctx: dict[str, Any]) -> _CardPolicy:
@@ -293,6 +278,7 @@ def _g0_integrity(ctx: dict[str, Any]) -> GateResult:
             raise OrganizerFault(str(exc)) from exc
         telemetry.require_official_telemetry(record)
         telemetry.require_exclusive_instance(record)
+        telemetry.require_repeat_evidence(record, plan)
     else:
         # Developer profile: the local harness handoff, read from the parent of the unit's output
         # directory. A file that exists but is corrupt fails the gate rather than falling through.
@@ -429,6 +415,8 @@ def _resolve_official_timing(ctx: dict[str, Any]) -> GateResult:
             ctx["plan"],
             reference_event_count=_reference_event_count(ctx),
             sub_names=sub_names,
+            unit_dir=pathlib.Path(ctx["unit_dir"]),
+            output_dir=pathlib.Path(ctx["output_dir"]),
         )
     except ParticipantFailure as exc:
         return GateResult(

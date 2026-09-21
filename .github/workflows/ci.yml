@@ -16,6 +16,13 @@ env:
   # tag and never a branch: an unpinned toolkit means a local result and a scored result can
   # diverge silently, which is the one failure mode the pin exists to prevent.
   QFBENCH2_COMMON_REF: v2.4.2
+  # Private staging tests the coordinated candidate before public toolkit publication. The
+  # candidate is the PUBLICATION candidate -- `Agenthon2026-public-staging` main, the tree the
+  # next public toolkit tag is cut from -- never the private hub, whose bytes participants do
+  # not receive (its scoring source differs from the port by formatting alone, which is enough
+  # to move a source hash). Public publication must update QFBENCH2_COMMON_REF to the released
+  # tag that carries this commit.
+  QFBENCH2_CANDIDATE_COMMON_REF: 53464fbd8f40f3f829985711dd6f679b3f386ce3
 
 jobs:
   # Runs FIRST and does not install the shared toolkit, so it survives anything that can go
@@ -85,6 +92,21 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
         with:
           python-version: "3.13"
+      - name: Require private candidate toolkit access in staging
+        if: endsWith(github.repository, '-staging')
+        env:
+          TOOLKIT_TOKEN: ${{ secrets.AGENTHON_TOOLKIT_TOKEN }}
+        run: test -n "$TOOLKIT_TOKEN"
+      - name: Check out the exact coordinated candidate toolkit in staging
+        if: endsWith(github.repository, '-staging')
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: Agenthon-2026/Agenthon2026-public-staging
+          ref: ${{ env.QFBENCH2_CANDIDATE_COMMON_REF }}
+          token: ${{ secrets.AGENTHON_TOOLKIT_TOKEN }}
+          path: .ci-toolkit
+          persist-credentials: false
+          lfs: false
       - name: Install tools + shared toolkit
         run: |
           python -m pip install --upgrade pip
@@ -104,7 +126,13 @@ jobs:
           # requests: GitHub withholds repository secrets from forks, so an install gated on
           # one dies at `pip install` before any check is reached. Nothing here needs the
           # private hub — `qfbench2-common` is published from Agenthon2026-public/common.
-          pip install "qfbench2-common @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@${{ env.QFBENCH2_COMMON_REF }}#subdirectory=common"
+          if [[ "$GITHUB_REPOSITORY" == *-staging ]]; then
+            test "$(git -C .ci-toolkit rev-parse HEAD)" = "$QFBENCH2_CANDIDATE_COMMON_REF"
+            pip install ./.ci-toolkit/common
+          else
+            pip install "qfbench2-common @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@${{ env.QFBENCH2_COMMON_REF }}#subdirectory=common"
+          fi
+          python -c "from qfbench2_common.contracts import stable_output_binding; print(stable_output_binding.__module__)"
       - name: Ruff lint
         run: ruff check qfbench2_track_simulation throughput regression_suite baselines/abides_fork
       - name: Ruff format check
@@ -137,6 +165,8 @@ jobs:
         run: python -m pytest tests/test_malicious_output.py -q
       - name: Contract-boundary tests (Hub C1/C2/C5/C7 fixtures)
         run: python -m pytest tests/test_contract_boundary.py -q
+      - name: Dataset selection and rollback regression tests
+        run: python -m pytest tests/test_build_dev_dataset.py -q
       - name: Shared scorer version (pyproject <-> SCORER_VERSION <-> package)
         run: python -m pytest tests/test_scorer_version.py -q
       # Re-run with the toolkit present so the cluster_key check actually executes: it imports
@@ -167,6 +197,21 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
         with:
           python-version: "3.13"
+      - name: Require private candidate toolkit access in staging
+        if: endsWith(github.repository, '-staging')
+        env:
+          TOOLKIT_TOKEN: ${{ secrets.AGENTHON_TOOLKIT_TOKEN }}
+        run: test -n "$TOOLKIT_TOKEN"
+      - name: Check out the exact coordinated candidate toolkit in staging
+        if: endsWith(github.repository, '-staging')
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: Agenthon-2026/Agenthon2026-public-staging
+          ref: ${{ env.QFBENCH2_CANDIDATE_COMMON_REF }}
+          token: ${{ secrets.AGENTHON_TOOLKIT_TOKEN }}
+          path: .ci-toolkit
+          persist-credentials: false
+          lfs: false
       - name: Install shared toolkit
         run: |
           python -m pip install --upgrade pip
@@ -175,7 +220,13 @@ jobs:
           # either to arrive transitively is how a job starts passing for the wrong reason.
           pip install "pyarrow>=12" "pandas>=2.2" "scipy>=1.10" "pytest>=8"
           # Public toolkit repository, no credential — see the note in the lint-type job.
-          pip install "qfbench2-common @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@${{ env.QFBENCH2_COMMON_REF }}#subdirectory=common"
+          if [[ "$GITHUB_REPOSITORY" == *-staging ]]; then
+            test "$(git -C .ci-toolkit rev-parse HEAD)" = "$QFBENCH2_CANDIDATE_COMMON_REF"
+            pip install ./.ci-toolkit/common
+          else
+            pip install "qfbench2-common @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@${{ env.QFBENCH2_COMMON_REF }}#subdirectory=common"
+          fi
+          python -c "from qfbench2_common.contracts import stable_output_binding; print(stable_output_binding.__module__)"
       - name: Validate all public units
         run: python .github/validate_units.py simulation
       # The acceptance test for the candidate-side ledger gate: every shipped reference ledger must

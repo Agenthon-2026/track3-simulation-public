@@ -35,8 +35,12 @@ parquet footer before any parser runs.
 from __future__ import annotations
 
 import json
+import tomllib
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
+
+from qfbench2_common.contracts import ContractError, OrganizerFault, normalize_tree_path
 
 __all__ = [
     "BATCH_ROOT_FILES",
@@ -44,12 +48,15 @@ __all__ = [
     "PROFILE_SIDECAR",
     "SINGLE_UNIT_FILES",
     "STABLE_OUTPUT_FILES",
+    "STABLE_REPEAT_POLICY_ID",
     "SUB_FILES",
     "VOLATILE_EVENTS_FIELDS",
     "VOLATILE_OUTPUT_FILES",
     "allowed_paths_for",
     "max_rows_for",
+    "requires_message_ledger",
     "stable_paths_for",
+    "stable_repeat_policy_for",
     "volatile_paths_for",
 ]
 
@@ -77,6 +84,7 @@ MAX_DEPTH = 2
 #: parquet bytes every time. These are the members a cross-repeat byte comparison can be made
 #: against.
 STABLE_OUTPUT_FILES: tuple[str, ...] = ("trace.parquet", "message_trace.parquet")
+STABLE_REPEAT_POLICY_ID = "t3-stable-output-v1"
 
 #: Output members whose bytes CANNOT be reproducible, because they report measurements of the run.
 #:
@@ -138,6 +146,67 @@ def stable_paths_for(unit_dir: str | Path) -> tuple[str, ...]:
         for p in allowed_paths_for(unit_dir)
         if p.rsplit("/", 1)[-1] in STABLE_OUTPUT_FILES
     )
+
+
+def requires_message_ledger(card: Mapping[str, Any]) -> bool:
+    """The existing semantic gate's declaration/default, also used by repeat producers."""
+    declared = card.get("scoring", {}).get("params", {}).get("requires_message_ledger")
+    if isinstance(declared, bool):
+        return declared
+    return bool(card.get("task", {}).get("scenario_family") != "throughput-scale")
+
+
+def stable_repeat_policy_for(unit_dir: str | Path) -> dict[str, Any]:
+    """Candidate repeat policy derived only from the organizer's card and batch manifest.
+
+    Producer and consumer pass this dictionary to the shared ``stable_output_binding`` helper.
+    A single-market trace is required; its ledger follows the existing card semantic rule and
+    still affects the digest whenever optional and present. Every declared batch sub requires
+    both files. No caller-supplied member list or participant directory listing sets this policy.
+    """
+    root = Path(unit_dir)
+    try:
+        card = tomllib.loads((root / "card.toml").read_text(encoding="utf-8"))
+        batch_path = root / "batch.json"
+        is_batch = bool(card.get("batch", {}).get("batch"))
+        if batch_path.exists() != is_batch:
+            raise OrganizerFault(
+                "organizer card and batch manifest disagree on unit shape"
+            )
+        if is_batch:
+            subs = json.loads(batch_path.read_text(encoding="utf-8"))["subs"]
+            if not isinstance(subs, list) or not subs:
+                raise OrganizerFault(
+                    "organizer batch manifest must declare nonempty subs"
+                )
+            names = []
+            for entry in subs:
+                name = normalize_tree_path(entry["sub"], field="organizer batch sub")
+                if "/" in name:
+                    raise OrganizerFault(
+                        "organizer batch sub must be one directory component"
+                    )
+                names.append(name)
+            if len({name.casefold() for name in names}) != len(names):
+                raise OrganizerFault("organizer batch manifest repeats a sub")
+            members = tuple(
+                f"{sub}/{file}" for sub in names for file in STABLE_OUTPUT_FILES
+            )
+            required = members
+        else:
+            members = STABLE_OUTPUT_FILES
+            required = members if requires_message_ledger(card) else ("trace.parquet",)
+    except OrganizerFault:
+        raise
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, ContractError):
+        raise OrganizerFault(
+            "organizer stable-output policy is unreadable or malformed"
+        ) from None
+    return {
+        "policy_id": STABLE_REPEAT_POLICY_ID,
+        "members": members,
+        "required_members": required,
+    }
 
 
 def volatile_paths_for(unit_dir: str | Path) -> tuple[str, ...]:
