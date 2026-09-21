@@ -16,9 +16,13 @@ env:
   # tag and never a branch: an unpinned toolkit means a local result and a scored result can
   # diverge silently, which is the one failure mode the pin exists to prevent.
   QFBENCH2_COMMON_REF: v2.4.2
-  # Private staging tests the coordinated candidate before public toolkit publication.
-  # Public publication must update QFBENCH2_COMMON_REF to the compatible released tag.
-  QFBENCH2_CANDIDATE_COMMON_REF: dff06ffb643fb1a973a68c442191464dc3e49bce
+  # Private staging tests the coordinated candidate before public toolkit publication. The
+  # candidate is the PUBLICATION candidate -- `Agenthon2026-public-staging` main, the tree the
+  # next public toolkit tag is cut from -- never the private hub, whose bytes participants do
+  # not receive (its scoring source differs from the port by formatting alone, which is enough
+  # to move a source hash). Public publication must update QFBENCH2_COMMON_REF to the released
+  # tag that carries this commit.
+  QFBENCH2_CANDIDATE_COMMON_REF: 53464fbd8f40f3f829985711dd6f679b3f386ce3
 
 jobs:
   # Runs FIRST and does not install the shared toolkit, so it survives anything that can go
@@ -97,7 +101,7 @@ jobs:
         if: endsWith(github.repository, '-staging')
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          repository: Agenthon-2026/Agenthon2026
+          repository: Agenthon-2026/Agenthon2026-public-staging
           ref: ${{ env.QFBENCH2_CANDIDATE_COMMON_REF }}
           token: ${{ secrets.AGENTHON_TOOLKIT_TOKEN }}
           path: .ci-toolkit
@@ -202,7 +206,7 @@ jobs:
         if: endsWith(github.repository, '-staging')
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          repository: Agenthon-2026/Agenthon2026
+          repository: Agenthon-2026/Agenthon2026-public-staging
           ref: ${{ env.QFBENCH2_CANDIDATE_COMMON_REF }}
           token: ${{ secrets.AGENTHON_TOOLKIT_TOKEN }}
           path: .ci-toolkit
