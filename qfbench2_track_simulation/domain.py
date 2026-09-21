@@ -147,10 +147,19 @@ MAX_PER_MARKET_EVENTS_PER_SEC = 1e7
 #: unofficial Development board believes.
 #:
 #: 1e7 used to serve both, derived as more than 10x the top of a competitive band that was later
-#: withdrawn as never measured. track3-simulation-public#19 then measured honest single-market rates
-#: of 10.47M to 12.04M events/sec, so 1e7 refused real submissions and scored their fastest units
-#: zero. The same rule applied to the measured top gives more than 1.2e8; 1e9 is the generous round
-#: value, per the asymmetry above, and it still refuses the reported fabrication (1e11) by 100x.
+#: withdrawn as never measured. It is NOT derived from any measurement of a submission: the
+#: Development path has no organizer clock, so nothing on it can be measured by us, and the
+#: single-market rates reported in track3-simulation-public#19 are the submission's OWN
+#: ``events.json`` self-reports. The organizers confirmed which gate refused those units, not that
+#: their rates were real. Do not restate them here or anywhere else as an organizer measurement.
+#:
+#: What this ceiling is for, then, is not a measured top but the shape of the work: cancel-heavy
+#: units retire enormous numbers of order-book events per unit of simulated time and are naturally
+#: fast, so a self-report one to two orders of magnitude above the withdrawn band is not by itself
+#: evidence of anything. On this profile the number it bounds is stamped ``rankable = False`` and
+#: ``trust_profile = development``, so believing a fast self-report costs no ranking integrity,
+#: while refusing an honest one deletes the top of a practice board. 1e9 is the generous round
+#: value, per the asymmetry above, and an unbounded fabrication (1e11) is still refused by 100x.
 DEV_PLAUSIBILITY_CEILING_PER_MARKET = 1e9
 
 
