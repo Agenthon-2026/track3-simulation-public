@@ -108,7 +108,7 @@ in this file and implemented in `../qfbench2_track_simulation/`.
 
 ## 3. Tolerance Model
 
-Tolerances are divided into two tiers. The tier assignment is fixed per family; a unit card may state it explicitly in `[scoring.params].semantic_tier`, and all 72 public cards do.
+Tolerances are divided into two tiers. The tier assignment is fixed per family; a unit card may state it explicitly in `[scoring.params].semantic_tier`, and all 71 cards under `../units/` do.
 
 > **This local harness is stricter than the official gate, on purpose. Know the difference.**
 >
