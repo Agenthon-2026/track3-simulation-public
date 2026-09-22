@@ -239,6 +239,13 @@ def test_the_roster_prose_pin_is_not_vacuous():
     )
     assert census["single"] + census["batch"] == census["n"]
 
+    # Coverage floor: the pin must keep covering every file that states the roster size, so a
+    # reworded sentence cannot be "fixed" by dropping its entry.
+    assert len(ROSTER_PROSE) >= 9, f"ROSTER_PROSE shrank to {len(ROSTER_PROSE)} entries"
+    assert {rel for rel, _ in ROSTER_PROSE} == {
+        "README.md", "AGENTS.md", "docs/CONCEPTS.md", "regression_suite/README.md"
+    }, "ROSTER_PROSE no longer covers every roster-stating file"
+
 
 def _run_all() -> int:
     """Script runner. SKIP is tallied separately from PASS.
