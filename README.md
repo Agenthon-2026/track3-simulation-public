@@ -391,8 +391,9 @@ official per-unit rate comes from the repeat measurement described above. A boot
 confidence interval is reported alongside the score; resampling is by
 scenario **family** rather than by unit, because units within a family share a generator and an
 agent mix and so are correlated (see `cluster_key` in `qfbench2_track_simulation/scoring.py`).
-Tie-breaking below the score is a platform-level rule and is not specified in this repository —
-do not assume the CI lower bound decides it.
+A tie in the ranking score is broken in favour of the Final submission uploaded earlier (see
+[Competition schedule and submission limits](#competition-schedule-and-submission-limits)); the
+bootstrap CI lower bound does not decide it.
 
 ### Local timing
 
@@ -597,6 +598,8 @@ scoring code is the `qfbench2_track_simulation/` package above, which is what
 Development runs through **October 12, 2026**. The joint **Final + Verification phase runs
 October 13–25, 2026**. Each team makes **one final submission per track**; organizers perform
 verification within that same phase, with no separate participant Verification submission.
+If two Final submissions finish this track with the same ranking score, the tie is broken in
+favour of the one uploaded earlier.
 Registration and Development close together on October 12, 2026 at **23:59 Anywhere on Earth (AoE, UTC−12)**. The joint Final + Verification phase closes on October 25, 2026 at **23:59 AoE**. Other competition dates and task/data cutoffs are unchanged.
 
 At the participant Development opening, Track 3 allows **5 uploads per team per day**
