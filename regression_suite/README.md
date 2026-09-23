@@ -48,7 +48,7 @@ The **per-family breakdown** of the 65 public regression scenarios is:
 
 Counted from `scenarios/*.json` (excluding `index.json`), whose `scenario_id` values resolve to the matching unit under `../units/`; `scenarios/index.json` carries the same `"count": 65`.
 
-**How 65 scenarios relate to the 72 units in `../units/`.** The extra seven are: the six batched multi-scenario BatchMarketSim units (`t3-gbatch-*`), which fall under F6 but run through the `simulate-batch` verb and carry their own `batch.json` + `scenarios/` rather than a flat scenario file here; and the worked exemplar `t3-EXAMPLE-vectorized-matching`, which is documentation and is not part of the regression run.
+**How 65 scenarios relate to the 71 units in `../units/`.** The extra six are the batched multi-scenario BatchMarketSim units (`t3-gbatch-*`), which fall under F6 but run through the `simulate-batch` verb and carry their own `batch.json` + `scenarios/` rather than a flat scenario file here. The worked exemplar now lives in `../examples/t3-EXAMPLE-vectorized-matching/`: it is documentation, not a roster unit, and is not part of the regression run.
 
 The 65 public scenarios are distributed in this repo with reference traces (the flat `*.json` files in `scenarios/`). A further set of scenarios is sealed (operator-only); its size is not disclosed.
 
@@ -108,7 +108,7 @@ in this file and implemented in `../qfbench2_track_simulation/`.
 
 ## 3. Tolerance Model
 
-Tolerances are divided into two tiers. The tier assignment is fixed per family; a unit card may state it explicitly in `[scoring.params].semantic_tier`, and all 72 public cards do.
+Tolerances are divided into two tiers. The tier assignment is fixed per family; a unit card may state it explicitly in `[scoring.params].semantic_tier`, and all 71 cards under `../units/` do.
 
 > **This local harness is stricter than the official gate, on purpose. Know the difference.**
 >

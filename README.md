@@ -7,7 +7,7 @@ like a real stock exchange?**
 
 You receive the open-source **ABIDES** simulator as your starting point. ABIDES is correct
 but slow. Your job is to produce a faster version — submitted as a Docker image — that:
-1. Passes a correctness check over the 72 public units plus a sealed scenario set (the **semantic regression suite**)
+1. Passes a correctness check over the 71 public units plus a sealed scenario set (the **semantic regression suite**)
 2. Passes a 4-metric realism check (the **stylized-fact admissibility gate**)
 3. Is then ranked by speed (`events_per_sec` on a sealed benchmark scenario)
 
@@ -138,9 +138,9 @@ A message-level record of the kernel's inter-agent message ledger. It feeds the
 latency/causality checks and the g3.5 protocol-fidelity gate.
 
 **The card decides, not the family — and most units require it.** `requires_message_ledger = true`
-is set on **59 of the 72** public units, well beyond the exchange-protocol and reactive-agent
+is set on **59 of the 71** public units, well beyond the exchange-protocol and reactive-agent
 families this page previously named. Read **`[scoring.params].requires_message_ledger`** from the
-unit's `card.toml` rather than inferring from the family; "may omit it" applies only to the 13 units
+unit's `card.toml` rather than inferring from the family; "may omit it" applies only to the 12 units
 whose card actually says so.
 
 ```toml
@@ -148,7 +148,7 @@ whose card actually says so.
 requires_message_ledger = true
 ```
 
-The key is under `[scoring.params]`, not `[scoring]` — measured, 72 of 72 cards put it there, and
+The key is under `[scoring.params]`, not `[scoring]` — measured, 71 of 71 cards put it there, and
 `_CardPolicy` reads `card["scoring"]["params"]`. A lookup on the wrong table returns nothing, which
 reads as "not required" and lands you back in the failure this section exists to prevent.
 
@@ -581,8 +581,9 @@ track3-simulation-public/
 ├── scripts/                         ← organizer-side generators and helper tools
 ├── tests/                           ← the guards CI runs
 ├── templates/                       ← card.toml / manifest.json / scenario.json templates
-└── units/                           ← 72 public units: 65 single-scenario, 6 batch, 1 exemplar
-    ├── t3-EXAMPLE-vectorized-matching/   ← the worked exemplar (README + card + scenario)
+├── examples/                        ← documentation-only material, NOT part of the roster
+│   └── t3-EXAMPLE-vectorized-matching/   ← the worked exemplar (README + card + scenario)
+└── units/                           ← 71 public units: 65 single-scenario, 6 batch
     ├── t3-s001-price-time-priority/      ← a single-scenario unit: card, scenario,
     │                                        trace.parquet, message_trace.parquet, events.json
     └── t3-gbatch-homog-4/                ← a batch unit: batch.json, scenarios/,

@@ -250,8 +250,8 @@ checks. Tier B uses the statistical comparison in `docs/CATEGORIES.md` instead.
 The **semantic regression check** is the correctness gate. It asks: "Does your simulator
 produce the same sequence of trades as ABIDES would, given the same scenario?"
 
-The check runs your Docker image on the 72 public units (65 single-scenario, 6 batch, and one
-worked exemplar that is documentation rather than a graded scenario) and on a sealed scenario set
+The check runs your Docker image on the 71 public units (65 single-scenario and 6 batch) and on a
+sealed scenario set
 whose size and labels are not published. For each scenario, it loads your `trace.parquet` and the
 pre-computed reference `trace.parquet`, then applies two tiers of comparison:
 
