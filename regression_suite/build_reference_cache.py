@@ -15,7 +15,8 @@ real copies if your tooling cannot follow links.
 Only the 65 single-scenario units are bridged. The six ``t3-gbatch-*`` units have a
 different shape (``batch.json`` + ``checks/reference_data/sub_XX/``) and ``run_regression.py``
 never resolves them through this path, so bridging them would be wrong as well as
-useless. ``t3-EXAMPLE-vectorized-matching`` has no regression scenario by design.
+useless. ``examples/t3-EXAMPLE-vectorized-matching`` has no regression scenario by design and is
+not a roster unit.
 
 Exit codes: 0 built (or already current), 1 refused, 2 inconsistent inputs.
 """

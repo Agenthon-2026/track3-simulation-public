@@ -15,7 +15,7 @@ English executive summary a finance student can follow.
 
 **In scope** (safe to create or edit here):
 - `docs/` — conceptual explainers, category reference, authoring guide
-- `regression_suite/scenarios/` — public scenario configs (65 single-scenario of 72 public units;
+- `regression_suite/scenarios/` — public scenario configs (65 single-scenario of 71 public units;
   the 66th file in that directory is `index.json`, not a scenario)
 - `qfbench2_track_simulation/scoring.py` — the public gate-wiring stub (g0–g3). Track 3 is the
   one track whose scorer is a package, not a `scoring/` directory: Tracks 2 and 4 do have
@@ -81,7 +81,7 @@ Rules that follow from this contract:
   mandatory or as the expected route in any document in this repo.
 - **`network = "none"` is unchanged.** The CUDA runtime and every dependency must be **vendored
   into the image**; nothing may be fetched at run time.
-- **Every Track-3 unit card declares `gpu = true`** — all 72 cards under `units/`, plus
+- **Every Track-3 unit card declares `gpu = true`** — all 71 cards under `units/`, plus
   `templates/card.toml`. Because the flag no longer varies, it no longer discriminates:
   the **efficiency branch** is keyed on `gpu_seconds > 0` and **GPU-award eligibility** on measured
   `gpu_utilization >= GPU_UTILIZATION_FLOOR` — never on the card flag. Never write "GPU units vs CPU

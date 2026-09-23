@@ -169,6 +169,84 @@ def test_cluster_key_groups_every_unit() -> None:
     assert cluster_key(UNITS / "does-not-exist") is None
 
 
+#: Participant-facing sentences that state the size of the Development roster, or a census taken
+#: over it. Each entry is (path, template); ``{n}`` is the number of directories under ``units/``,
+#: ``{single}`` / ``{batch}`` the two arities, ``{ledger}`` the cards declaring a required ledger.
+#:
+#: This list exists because a roster change leaves these behind. The 72 -> 71 withdrawal edited
+#: nine of them and missed ``regression_suite/README.md`` ("all 72 public cards do"), which nothing
+#: asserted: the suite was green with the file stating 71 in one paragraph and 72 in another.
+ROSTER_PROSE = (
+    ("README.md", "over the {n} public units"),
+    ("README.md", "**{ledger} of the {n}** public units"),
+    ("README.md", "{n} of {n} cards put it there"),
+    ("README.md", "{n} public units: {single} single-scenario, {batch} batch"),
+    ("AGENTS.md", "({single} single-scenario of {n} public units"),
+    ("AGENTS.md", "all {n} cards under `units/`"),
+    ("docs/CONCEPTS.md", "the {n} public units ({single} single-scenario and {batch} batch)"),
+    ("regression_suite/README.md", "the {n} units in `../units/`"),
+    ("regression_suite/README.md", "all {n} cards under `../units/`"),
+)
+
+
+def _roster_census() -> dict:
+    """The numbers the prose is allowed to state, read from the cards and the tree."""
+    units = sorted(p for p in UNITS.iterdir() if p.is_dir())
+    batch = [u for u in units if (u / "batch.json").exists()]
+    ledger = 0
+    for unit in units:
+        card = tomllib.loads((unit / "card.toml").read_text(encoding="utf-8"))
+        if card.get("scoring", {}).get("params", {}).get("requires_message_ledger") is True:
+            ledger += 1
+    return {"n": len(units), "batch": len(batch), "single": len(units) - len(batch),
+            "ledger": ledger}
+
+
+def test_published_prose_states_the_real_roster_size():
+    """Every pinned sentence must state the measured numbers.
+
+    A stale roster count is not cosmetic here: a team that counts 71 directories against a
+    sentence saying 72 cannot tell whether one card is missing the key the sentence is about.
+    """
+    census = _roster_census()
+    missing = []
+    for rel, template in ROSTER_PROSE:
+        want = template.format(**census)
+        body = (ROOT / rel).read_text(encoding="utf-8")
+        if want not in body:
+            missing.append(f"{rel}: expected {want!r}")
+    assert not missing, (
+        "roster prose does not match the measured census "
+        + repr(census) + "; " + "; ".join(missing)
+        + " -- re-measure the sentence, or update ROSTER_PROSE with it if it was reworded"
+    )
+
+
+def test_the_roster_prose_pin_is_not_vacuous():
+    """Control: the pin must fail on a roster size that is not this repository's.
+
+    Substring pins fail open when the sentence is reworded and nobody notices, so prove here that
+    a wrong number is actually rejected rather than silently matched.
+    """
+    census = _roster_census()
+    wrong = dict(census, n=census["n"] + 1)
+    matched = [
+        rel for rel, template in ROSTER_PROSE
+        if template.format(**wrong) in (ROOT / rel).read_text(encoding="utf-8")
+    ]
+    assert not matched, (
+        f"a roster size of {wrong['n']} still matches in {matched}; the pin cannot detect drift"
+    )
+    assert census["single"] + census["batch"] == census["n"]
+
+    # Coverage floor: the pin must keep covering every file that states the roster size, so a
+    # reworded sentence cannot be "fixed" by dropping its entry.
+    assert len(ROSTER_PROSE) >= 9, f"ROSTER_PROSE shrank to {len(ROSTER_PROSE)} entries"
+    assert {rel for rel, _ in ROSTER_PROSE} == {
+        "README.md", "AGENTS.md", "docs/CONCEPTS.md", "regression_suite/README.md"
+    }, "ROSTER_PROSE no longer covers every roster-stating file"
+
+
 def _run_all() -> int:
     """Script runner. SKIP is tallied separately from PASS.
 
