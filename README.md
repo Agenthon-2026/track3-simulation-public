@@ -448,8 +448,9 @@ pip install "qfbench2-common[data] @ git+https://github.com/Agenthon-2026/Agenth
 > `Agenthon-2026/Agenthon2026-public` carries the `qfbench2-common` package, and `v2.4.4` is the
 > tag CI installs (`QFBENCH2_COMMON_REF` in `.github/workflows/ci.yml`) and the tag whose descriptor
 > contract matches what the scorer accepts. **This version is required, not just recommended:**
-> the scorer imports `stable_output_binding` from it at `import qfbench2_track_simulation`, so an
-> older toolkit fails with `cannot import name 'stable_output_binding'`. Reinstall the toolkit with
+> the scorer imports `digest_members` and `stable_output_binding` from it at
+> `import qfbench2_track_simulation`, so an older toolkit fails with
+> `cannot import name 'digest_members'`. Reinstall the toolkit with
 > the command above before `pip install .`. The package declares `qfbench2-common>=2.4.4`, so with an
 > older toolkit installed `pip install .` stops first with
 > `ERROR: No matching distribution found for qfbench2-common<3,>=2.4.4` — that message means
