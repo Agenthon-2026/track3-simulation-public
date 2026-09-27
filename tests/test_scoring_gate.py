@@ -21,13 +21,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import pandas as pd  # noqa: E402
 
 import _contract_fixtures as F  # noqa: E402
-from qfbench2_common.contracts import OrganizerFault  # noqa: E402
+from qfbench2_common.contracts import OrganizerFault, ParticipantFailure  # noqa: E402
 from qfbench2_common.failure_labels import (  # noqa: E402
     ORGANIZER_FAULT_LABELS,
     FailureLabel,
+    public_failure_code,
 )
 
-from qfbench2_track_simulation import scoring  # noqa: E402
+from qfbench2_track_simulation import scoring, telemetry  # noqa: E402
 from qfbench2_track_simulation.scoring import (  # noqa: E402
     build_developer_verifier,
     build_verifier,
@@ -144,6 +145,64 @@ def test_the_developer_factory_runs_the_same_gates_and_never_ranks(tmp_path: Pat
     assert verdict.detail["score_source"] == "self_reported"
 
 
+def _developer_ctx_reporting(root: Path, rate: float) -> dict[str, object]:
+    """A developer context whose candidate self-reports `rate`, with a consistent triple."""
+    unit, out = build_unit(root)
+    (out / "events.json").write_text(
+        json.dumps(_events(N_ROWS, N_ROWS / rate, _sha(out / "trace.parquet")))
+    )
+    return {"unit_dir": unit, "output_dir": out}
+
+
+def test_a_normal_developer_rate_scores_unchanged(tmp_path: Path) -> None:
+    ctx = developer_ctx(tmp_path)
+    verdict = build_developer_verifier(ctx).run(ctx)
+    assert abs(verdict.score - N_ROWS / 1.5) < 1e-6
+    assert "score_capped_from" not in verdict.detail
+
+
+def test_a_rate_above_the_cap_is_admitted_and_scores_the_cap(tmp_path: Path) -> None:
+    """A synthetic 1.2e7 sits above the 1e7 cap and far below the 1e9 refusal line: it is admitted,
+    not zeroed, and scores exactly the cap."""
+    ctx = _developer_ctx_reporting(tmp_path, 1.2e7)
+    verdict = build_developer_verifier(ctx).run(ctx)
+    assert verdict.admissible, verdict.gate_results
+    assert verdict.score == 1e7
+    assert abs(verdict.detail["score_capped_from"] - 1.2e7) < 1.0
+
+
+def test_no_admitted_rate_scores_above_the_cap(tmp_path: Path) -> None:
+    """A self-reported rate cannot be verified on the developer path, so any admitted claim, however
+    close to the 1e9 refusal line, scores at most the 1e7 cap."""
+    ctx = _developer_ctx_reporting(tmp_path, 9e8)
+    verdict = build_developer_verifier(ctx).run(ctx)
+    assert verdict.admissible, verdict.gate_results
+    assert verdict.score == 1e7
+
+
+def test_an_absurd_developer_rate_is_still_refused(tmp_path: Path) -> None:
+    ctx = _developer_ctx_reporting(tmp_path, 1e11)
+    verdict = build_developer_verifier(ctx).run(ctx)
+    assert not verdict.admissible
+
+
+def test_a_batch_unit_is_capped_at_1e7_like_any_other_unit(tmp_path: Path) -> None:
+    """The cap is per unit, batch units included, which is where the live Development average
+    already clips every unit. Its market count does not raise it."""
+    unit = tmp_path / "bunit"
+    unit.mkdir()
+    (unit / "batch.json").write_text(json.dumps({"subs": [{"sub": f"sub_{i:02d}"} for i in range(3)]}))
+    detail = scoring._developer_score(
+        {
+            "unit_dir": unit,
+            "_batch": {"n_subs": 3},
+            "_batch_events": {"events_per_sec": 5e8, "n_scenarios": 3},
+        }
+    )
+    assert detail["score"] == 1e7
+    assert detail["score_capped_from"] == 5e8
+
+
 # --------------------------------------------------------------------------- factory separation
 def test_the_official_factory_refuses_a_context_without_trusted_evidence(tmp_path: Path) -> None:
     """A harness that cannot supply C1+C2 cannot use the production factory at all. Pre-fix the
@@ -191,6 +250,129 @@ def test_a_card_that_requires_a_ledger_with_no_reference_is_an_organizer_fault(
 
 
 # --------------------------------------------------------------------------- participant failures
+def _failed_raw(runs: int, **lifecycle: object) -> dict:
+    """A C2 whose Runner stopped at a failed run, carrying the ``runs`` so far (a legacy 1.1.0 body,
+    as the Hub fixture is)."""
+    raw = F.run_record_mapping(n_events=N_ROWS)
+    raw["repeats"] = raw["repeats"][:runs]
+    raw["lifecycle"].update({"exit_code": 1, **lifecycle})
+    raw["participant_outcome"] = "failure"
+    return raw
+
+
+def _failed_ctx(root: Path, raw: dict, *, sign: bool = True) -> dict:
+    """An official context over ``raw``. The retained output is a valid one, so an admissible verdict
+    would mean the scorer graded an earlier run's output instead of the failure."""
+    ctx = official_ctx(root)
+    ctx["run_record"] = F.signed_record(raw) if sign else F.RunRecord.from_mapping(raw)
+    return ctx
+
+
+def _charged(ctx: dict) -> tuple[list, dict]:
+    verdict = build_verifier(ctx).run(ctx)
+    assert not verdict.admissible
+    assert not set(verdict.labels) & set(ORGANIZER_FAULT_LABELS)
+    (g0,) = verdict.gate_results.values()
+    return verdict.labels, g0.detail
+
+
+def test_a_run_that_fails_part_way_is_a_participant_failure(tmp_path: Path) -> None:
+    """The Runner stops at the first failed run, so run 3 of 5 crashing leaves 3 signed repeats. A
+    direct caller of build_verifier used to get an organizer fault here, because the gate demanded
+    all 5 repeats before reading anything else."""
+    labels, detail = _charged(_failed_ctx(tmp_path, _failed_raw(3)))
+    assert labels == [] and detail["code"] == "container_crashed"  # no label maps to this code
+    assert detail["repeats_recorded"] == 3
+
+
+def test_a_failure_with_no_runs_recorded_is_still_charged(tmp_path: Path) -> None:
+    labels, detail = _charged(_failed_ctx(tmp_path, _failed_raw(0)))
+    assert detail["code"] == "container_crashed" and detail["repeats_recorded"] == 0
+
+
+def test_a_failure_reports_the_platforms_code_for_its_lifecycle(tmp_path: Path) -> None:
+    """The same codes the platform reports: a kill is a crash, a container that never started is
+    an unusable image, and a timeout or OOM keeps its own label."""
+    cases = [
+        ({"exit_code": 137}, "container_crashed", None),
+        ({"phase_reached": "created", "daemon_status": "created", "exit_code": None},
+         "image_unusable", FailureLabel.INTEGRITY_BAD_IMAGE_HASH),
+        ({"timed_out": True}, "resource_timeout", FailureLabel.RESOURCE_TIMEOUT),
+        ({"oom_killed": True}, "resource_oom", FailureLabel.RESOURCE_OOM),
+        # Both flags: timeout wins, as on the platform.
+        ({"timed_out": True, "oom_killed": True}, "resource_timeout", FailureLabel.RESOURCE_TIMEOUT),
+    ]
+    for i, (lifecycle, code, label) in enumerate(cases):
+        labels, detail = _charged(_failed_ctx(tmp_path / str(i), _failed_raw(2, **lifecycle)))
+        assert detail["code"] == code, lifecycle
+        assert labels == ([label] if label else []), lifecycle
+        assert public_failure_code(labels) == code or label is None
+
+
+def test_a_failed_run_is_never_graded_on_an_earlier_runs_output(tmp_path: Path) -> None:
+    """Even with all 5 repeats present and a valid retained output, a recorded failure decides."""
+    _charged(_failed_ctx(tmp_path, _failed_raw(5)))
+
+
+def test_the_cross_check_path_sees_the_failure_too(tmp_path: Path) -> None:
+    """``ranked_timing`` is what the private cross-check scorer calls, and it reaches the same
+    failure through ``require_repeat_evidence``: a participant failure, never a ranked rate."""
+    ctx = _failed_ctx(tmp_path, _failed_raw(3))
+    exc = _expect(
+        telemetry.RunFailed,
+        lambda: telemetry.ranked_timing(
+            ctx["run_record"], ctx["plan"], unit_dir=ctx["unit_dir"], output_dir=ctx["output_dir"]
+        ),
+    )
+    assert isinstance(exc, ParticipantFailure)
+
+
+def test_a_failure_is_held_without_admissible_telemetry_on_an_idle_instance(tmp_path: Path) -> None:
+    """Checked inside ``require_repeat_evidence`` itself, so no caller can charge a failure first."""
+    for i, block in enumerate(
+        [F.telemetry_block(exclusive=False), F.telemetry_block(samples_taken=10, samples_missed=90)]
+    ):
+        raw = _failed_raw(3)
+        raw["telemetry"] = block
+        ctx = _failed_ctx(tmp_path / str(i), raw)
+        _expect(OrganizerFault, lambda: build_verifier(ctx).run(ctx))
+        _expect(OrganizerFault, lambda: telemetry.require_repeat_evidence(ctx["run_record"], ctx["plan"]))
+
+
+def test_a_failure_whose_record_is_unrankable_is_held(tmp_path: Path) -> None:
+    raw = _failed_raw(3)
+    raw["rankability"] = {"state": "unrankable", "unmet_controls": ["tier_unenforced"]}
+    ctx = _failed_ctx(tmp_path, raw)
+    _expect(OrganizerFault, lambda: build_verifier(ctx).run(ctx))
+
+
+def test_a_legacy_create_timeout_is_held_as_the_hub_holds_it(tmp_path: Path) -> None:
+    """A 1.1.0 record carries no execution_fault, so a container that timed out while still being
+    created must not become a participant timeout here."""
+    raw = _failed_raw(0, timed_out=True, phase_reached="created", daemon_status="created", exit_code=None)
+    ctx = _failed_ctx(tmp_path, raw)
+    exc = _expect(OrganizerFault, lambda: build_verifier(ctx).run(ctx))
+    assert "create_timeout" in str(exc)
+
+
+def test_an_unattested_failure_is_held_not_charged(tmp_path: Path) -> None:
+    ctx = _failed_ctx(tmp_path, _failed_raw(3), sign=False)
+    _expect(OrganizerFault, lambda: build_verifier(ctx).run(ctx))
+
+
+def test_a_failure_on_an_unrankable_run_or_past_the_plan_is_held(tmp_path: Path) -> None:
+    raw = _failed_raw(3)
+    raw["repeats"][0]["rankability"] = {"state": "unrankable", "unmet_controls": ["telemetry_absent"]}
+    ctx = _failed_ctx(tmp_path / "unrankable", raw)
+    _expect(OrganizerFault, lambda: build_verifier(ctx).run(ctx))
+
+    raw = _failed_raw(5)
+    raw["repeats"].append(dict(raw["repeats"][-1], index=5))
+    ctx = _failed_ctx(tmp_path / "too_many", raw)
+    exc = _expect(OrganizerFault, lambda: build_verifier(ctx).run(ctx))
+    assert "more than the 5" in str(exc)
+
+
 def test_a_corrupt_candidate_parquet_fails_one_unit_and_does_not_escape(tmp_path: Path) -> None:
     """Pre-fix: `pd.read_parquet` raised ArrowInvalid straight out of `build_verifier(...).run()`,
     and the hub driver called it with no try — so one malformed file aborted the whole unit loop.

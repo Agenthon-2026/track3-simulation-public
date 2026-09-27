@@ -127,10 +127,10 @@ inflated throughput.
 
 On the Development board your `events_per_sec` is a self-report: no organizer clock times a
 Development run, so the number you write is the score input. It is therefore bounded — a
-self-reported single-market rate above 1e9 events/sec is refused as implausible, and for a batch
-unit that bound is multiplied by the unit's number of markets. This applies to the Development
-board only; on the Final path the rate is measured by the organizers' host, so there is no
-self-reported magnitude left to bound.
+self-reported rate above 1e9 events/sec per market is refused as implausible (for a batch unit,
+1e9 times its number of markets), and any admitted rate counts as at most 1e7 events/sec per unit,
+batch units included. This applies to the Development board only; on the Final path the rate is
+measured by the organizers' host, so there is no self-reported magnitude left to bound.
 
 ### `message_trace.parquet`
 
@@ -361,10 +361,10 @@ Final ranking. Development does not promise a dedicated, otherwise-idle timing i
 Official Final timing requires the organizer's production path and validated timing evidence.
 The production scorer's existing requirements below are **not the current Development timing
 service**. The repeat producer and validator must be made consistent and verified together
-before this path is ready for Final. In particular, the current whole-output-tree comparison
-includes changing telemetry such as elapsed time; participants must keep reporting real timing,
-not replace it with constants to make repeats match. The correction and worked examples still
-need a versioned publication. See the [acknowledged timing issue](https://github.com/Agenthon-2026/track3-simulation-public/issues/5).
+before this path is ready for Final. Runs are compared on a fixed set of output files named by
+the organizer's unit (`stable_output_binding`): traces and message ledgers must match byte for byte,
+while timing sidecars such as `events.json` may differ between runs. Keep reporting real timing; do
+not replace it with constants to make runs match. See the [acknowledged timing issue](https://github.com/Agenthon-2026/track3-simulation-public/issues/5).
 
 In the production scorer, the official number is `events_per_sec`, **measured by the organizer's
 runner, never read from your `events.json`**. Its current per-unit requirements are:
@@ -374,11 +374,18 @@ runner, never read from your `events.json`**. Its current per-unit requirements 
    not chosen after the fact from what was observed.
 2. Discard exactly the warm-up repeats committed in that plan. Do not infer the official
    count from the local timer's defaults.
-3. Every remaining repeat must be individually valid *and* must have produced the same output
-   bytes and the same event count as the run that was scored. A submission whose repeats disagree
-   is refused rather than having its best repeat kept.
+3. Every run, including the warm-up, whose rate is not counted, must succeed *and* must produce
+   the same stable output files (above) and the same event count as the run that was scored. A
+   submission whose runs disagree is refused rather than having its best run kept.
 4. Each repeat's rate is the runner's own event count (the parquet footer row count) divided by
-   the runner's own wall clock. The unit's score is the **median** of those rates.
+   the runner's own wall clock. The unit's score is the **median** of those rates. That wall clock
+   is the Docker daemon's own window for your container, from when it starts to when it exits
+   (`State.StartedAt` to `State.FinishedAt`); creating, inspecting and removing the container are
+   not counted.
+5. Each run is limited to 300 seconds; a run that reaches the limit is stopped. A run that fails
+   because of the submission (it reaches that limit, crashes or runs out of memory) scores the unit
+   0, and the unit stays in the average. The local timer defaults to 1,800 seconds per run; set
+   `QFB2_T3_RUN_TIMEOUT_SEC=300` to rehearse the Final limit.
 
 Your self-reported `events_per_sec` is still checked for internal consistency (g1: within ±5% of
 `n_events ÷ wall_clock_sec`; g3: `n_events` equal to the real row count), but it is not the ranked

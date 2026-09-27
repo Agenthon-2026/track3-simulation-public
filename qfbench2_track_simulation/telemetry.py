@@ -68,6 +68,9 @@ from qfbench2_common.contracts import (
     stable_output_binding,
     telemetry_admissible_for_timing,
 )
+from qfbench2_common.contracts.codes import FailureCode
+from qfbench2_common.contracts.run_record import derive_execution_fault
+from qfbench2_common.failure_labels import FailureLabel, public_failure_code
 
 from .limits import stable_repeat_policy_for
 
@@ -78,10 +81,12 @@ __all__ = [
     "PROFILE_OFFICIAL",
     "SAMPLING_INTERVAL_MS",
     "RankedTiming",
+    "RunFailed",
     "measured_repeats",
     "ranked_timing",
     "require_exclusive_instance",
     "require_official_telemetry",
+    "require_failure_evidence",
     "require_repeat_evidence",
     "trusted_event_count",
     "validate_repeat_sidecars",
@@ -231,29 +236,13 @@ def require_repeat_evidence(record: RunRecord, plan: EvaluationPlan) -> None:
     additional check ensures a caller did not add bindings after the attested payload was made;
     it is not a replacement for verifying the signature against the organizer trust store.
     """
+    if record.participant_outcome == "failure":
+        require_failure_evidence(record, plan)
+        raise RunFailed(record)
     measured_repeats(record, plan)
     if plan.every_repeat_must_pass is not True:
         raise OrganizerFault("official Track 3 requires every_repeat_must_pass")
-    if (
-        record.attestation is None
-        or record.attestation.observation_verdict != "confirmed"
-    ):
-        raise OrganizerFault(
-            "official Track 3 repeat evidence has no confirmed Runner attestation"
-        )
-    try:
-        signed_digest = record.attestation_payload_digest()
-    except ContractError:
-        raise OrganizerFault(
-            "official Track 3 repeat evidence has no attested payload"
-        ) from None
-    if signed_digest != record.attestation.signature.payload_digest:
-        raise OrganizerFault(
-            "official Track 3 repeat evidence is outside the attested payload"
-        )
-    raw_repeats = record.raw.get("repeats", [])
-    if not isinstance(raw_repeats, list) or len(raw_repeats) != len(record.repeats):
-        raise OrganizerFault("repeat evidence differs from the attested record")
+    raw_repeats = _attested_raw_repeats(record)
     for index, repeat in enumerate(record.repeats):
         if "stable_output_binding" not in repeat:
             raise OrganizerFault(
@@ -279,6 +268,111 @@ def require_repeat_evidence(record: RunRecord, plan: EvaluationPlan) -> None:
             "the final repeat does not bind the retained full C3 output tree; "
             "the producer and scorer disagree on retention"
         )
+
+
+class RunFailed(ParticipantFailure):
+    """The Runner recorded a failed run: a participant failure, W = 0.0, kept in the denominator.
+
+    Carries the public code the platform reports for the same lifecycle: ``resource_timeout``,
+    ``resource_oom``, ``image_unusable`` for a container that never started, and
+    ``container_crashed`` otherwise. ``label`` is the one label whose public code is exactly that
+    code, or ``None`` where the closed label set has none (``container_crashed``); ``detail["code"]``
+    carries the code either way, and the public projection keeps it.
+    """
+
+    def __init__(self, record: RunRecord) -> None:
+        life = record.lifecycle
+        if life.timed_out:  # before OOM, as the platform checks them
+            code = FailureCode.RESOURCE_TIMEOUT
+        elif life.oom_killed:
+            code = FailureCode.RESOURCE_OOM
+        elif life.phase_reached == "created":
+            code = FailureCode.IMAGE_UNUSABLE
+        else:
+            code = FailureCode.CONTAINER_CRASHED
+        self.code = code
+        self.label: FailureLabel | None = next(
+            (label for label in FailureLabel if public_failure_code([label]) == code),
+            None,
+        )
+        self.detail: dict[str, Any] = {
+            "code": code.value,
+            "repeats_recorded": len(record.repeats),
+        }
+        super().__init__(
+            f"unit {record.unit_handle!r}: the Runner recorded a failed run ({code.value})"
+        )
+
+
+def _attested_raw_repeats(record: RunRecord) -> list[Any]:
+    """The signed repeat array, after checking the record is the one the Runner attested."""
+    if (
+        record.attestation is None
+        or record.attestation.observation_verdict != "confirmed"
+    ):
+        raise OrganizerFault(
+            "official Track 3 repeat evidence has no confirmed Runner attestation"
+        )
+    try:
+        signed_digest = record.attestation_payload_digest()
+    except ContractError:
+        raise OrganizerFault(
+            "official Track 3 repeat evidence has no attested payload"
+        ) from None
+    if signed_digest != record.attestation.signature.payload_digest:
+        raise OrganizerFault(
+            "official Track 3 repeat evidence is outside the attested payload"
+        )
+    raw_repeats = record.raw.get("repeats", [])
+    if not isinstance(raw_repeats, list) or len(raw_repeats) != len(record.repeats):
+        raise OrganizerFault("repeat evidence differs from the attested record")
+    return raw_repeats
+
+
+def require_failure_evidence(record: RunRecord, plan: EvaluationPlan) -> None:
+    """Require attested evidence before a run that failed part-way is charged to the participant.
+
+    Every repeat must pass, so the Runner stops at the first failed run and signs the evidence for
+    the runs so far, which may be none. A failure record therefore carries AT MOST the plan's
+    repeat count, not exactly it. The failure itself is ``participant_outcome``, which the contract
+    derives from daemon facts the participant cannot write. Everything else is held to the success
+    path's standard, checked here so no caller can skip it: admissible telemetry on an idle
+    instance, no infrastructure fault in the host diagnosis, a confirmed attestation over this
+    exact record, a valid production profile, and a rankable profile on every run recorded.
+    """
+    require_official_telemetry(record)
+    require_exclusive_instance(record)
+    fault = derive_execution_fault(record.lifecycle)
+    if fault.infrastructure:
+        # A C2 1.2 record already says so through its rankability; a legacy 1.1.0 record carries
+        # no execution_fault, so the same bounded diagnosis is derived from its lifecycle here.
+        raise OrganizerFault(
+            f"unit {record.unit_handle!r}: the host diagnosis is {fault.reason!r}, an "
+            "infrastructure fault, so the failed run is not charged to the participant"
+        )
+    if plan.every_repeat_must_pass is not True:
+        raise OrganizerFault("official Track 3 requires every_repeat_must_pass")
+    if plan.repeats is None:  # pragma: no cover - plan is T3
+        raise OrganizerFault("the C1 plan carries no repeat policy")
+    if not record.rankability.is_rankable:
+        raise OrganizerFault(
+            f"unit {record.unit_handle!r}: the failed run was not under a valid production "
+            f"profile ({list(record.rankability.unmet_controls)}), so it is not charged to the "
+            "participant"
+        )
+    if len(record.repeats) > plan.repeats:
+        raise OrganizerFault(
+            f"unit {record.unit_handle!r}: a failed run carries {len(record.repeats)} repeat "
+            f"record(s), more than the {plan.repeats} the plan commits"
+        )
+    for repeat in record.repeats:
+        if not repeat["rankability"].is_rankable:
+            raise OrganizerFault(
+                f"unit {record.unit_handle!r}: repeat {repeat['index']} is not rankable "
+                f"({list(repeat['rankability'].unmet_controls)}), so the failure is not charged "
+                "to the participant"
+            )
+    _attested_raw_repeats(record)
 
 
 def _assert_repeats_reproduce_scored_tree(

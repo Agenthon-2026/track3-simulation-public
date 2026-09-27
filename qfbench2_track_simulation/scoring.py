@@ -278,7 +278,12 @@ def _g0_integrity(ctx: dict[str, Any]) -> GateResult:
             raise OrganizerFault(str(exc)) from exc
         telemetry.require_official_telemetry(record)
         telemetry.require_exclusive_instance(record)
-        telemetry.require_repeat_evidence(record, plan)
+        try:
+            telemetry.require_repeat_evidence(record, plan)
+        except telemetry.RunFailed as exc:
+            # A recorded failure is decided here, before any retained output is read, so an
+            # earlier successful run's output can never grade a unit whose run failed.
+            return GateResult(False, exc.label, exc.detail)
     else:
         # Developer profile: the local harness handoff, read from the parent of the unit's output
         # directory. A file that exists but is corrupt fails the gate rather than falling through.
@@ -692,6 +697,16 @@ def _official_score(ctx: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+#: The most a developer-profile unit can SCORE: 1e7 events/sec per unit, batch units included, which
+#: is where the live Development average already clips every unit. Distinct from the refusal line:
+#: `_developer_plausibility` refuses only above `DEV_PLAUSIBILITY_CEILING_PER_MARKET` (1e9 per
+#: market), so a rate above 1e7 is admitted rather than zeroed. The rate is self-reported and
+#: nothing on the developer path can verify it, so a claim between the cap and the refusal line is
+#: admitted but earns no more than the cap. Official scoring never reaches this; it ranks on
+#: host-measured timing.
+_DEVELOPER_SCORE_CAP = domain.MAX_PER_MARKET_EVENTS_PER_SEC
+
+
 def _developer_score(ctx: dict[str, Any]) -> dict[str, Any]:
     """A NON-RANKABLE events/sec for local practice. Never reachable from the platform driver."""
     unit = pathlib.Path(ctx["unit_dir"]).name
@@ -700,16 +715,20 @@ def _developer_score(ctx: dict[str, Any]) -> dict[str, Any]:
         if ctx.get("_batch")
         else ctx["_events"]["events_per_sec"]
     )
-    score, source = host_metrics.developer_events_per_sec(
+    rate, source = host_metrics.developer_events_per_sec(
         ctx.get("_host_metrics"), unit, self_reported
     )
-    return {
-        "score": score,
+    cap = _DEVELOPER_SCORE_CAP
+    detail: dict[str, Any] = {
+        "score": min(rate, cap),
         "profile": telemetry.PROFILE_DEVELOPER,
         "rankable": False,
         "score_source": source,
         "stylized_facts": None if ctx.get("_batch") else ctx.get("_sf_report"),
     }
+    if rate > cap:
+        detail["score_capped_from"] = rate
+    return detail
 
 
 # Declared at the parameter's exact type. `HierarchicalVerifier.__init__` takes
