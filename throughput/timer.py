@@ -367,17 +367,18 @@ class _CgroupMemorySampler:
         return self._peak
 
 
-# gVisor will not start a GPU sandbox unless the driver capabilities are declared, and docker's
-# default set is not enough. Measured by NVIDIA on a B200: under `runsc-gpu`, `--gpus all` alone
-# fails with **exit 125 -- the sandbox never starts**; the same run with this variable exits 0.
+# History: this declaration dates from an earlier setup that ran units under gVisor. Development
+# and Final runs now use `runc`. gVisor will not start a GPU sandbox unless the driver capabilities
+# are declared, and docker's default set is not enough. Measured by NVIDIA on a B200: under
+# `runsc-gpu`, `--gpus all` alone fails with **exit 125 -- the sandbox never starts**; the same run
+# with this variable exits 0.
 #
 # `compute` deliberately, not `utility` or `all`. `utility` injects the nvidia-persistenced socket,
 # which a participant container has no business holding. A CuPy workload JIT-compiling through
 # nvrtc was verified to work under `compute` alone on the same hardware.
 #
-# Track 3 is the track this matters most for: EVERY T3 unit card sets `gpu = true`, so on a gVisor
-# worker without it, 100% of Track 3 units fail to launch -- and this launcher, not the hub's
-# ingestion program, is what produces the ranked events/sec number.
+# EVERY T3 unit card sets `gpu = true`, so on a gVisor worker without it, 100% of Track 3 units
+# would fail to launch.
 DRIVER_CAPABILITIES = (
     os.environ.get("QFBENCH_DRIVER_CAPABILITIES", "").strip() or "compute"
 )

@@ -10,25 +10,23 @@ GPU time / peak memory for the award are measured host-side by the harness, not 
 profile. (Running `ncu` on the shared eval box is a perf-counter/isolation decision for the
 organizers — default is no; profile locally.)
 
-> ### CPU-time accounting inside a unit is wrong, by about 4×
+> ### CPU-time accounting under the earlier gVisor setup (history)
 >
-> There is a second reason to profile on your own machine, and it is not about overhead.
->
-> Ranked runs execute under gVisor, and **gVisor does not report CPU time accurately to the
-> process inside it**. NVIDIA measured `os.times()` reporting 0.55 cores against a `--cpus=2` cap,
-> on a workload that completed 91% of the same work `runc` did (2026-08-25). Anything
-> self-profiling from inside a unit — `os.times()`, `resource.getrusage()`, `/proc/stat`,
-> `time.process_time()`, and any library built on them — gets an answer that is wrong by roughly
-> that factor.
+> Development and Final runs use the `runc` container runtime, which reports CPU time to the
+> process normally. An earlier setup ran units under gVisor, and **gVisor does not report CPU time
+> accurately to the process inside it**. NVIDIA measured `os.times()` reporting 0.55 cores against a
+> `--cpus=2` cap, on a workload that completed 91% of the same work `runc` did (2026-08-25). A
+> CPU-time profile taken inside a unit under that setup — `os.times()`, `resource.getrusage()`,
+> `/proc/stat`, `time.process_time()`, and any library built on them — is wrong by roughly that
+> factor, so do not compare one with a current profile.
 >
 > **Track 3's ranked metric is unaffected**: `events/sec` is wall-clock based and measured
 > host-side by the harness, not read from anything your process reports. Wall-clock inside the
 > container (`time.perf_counter`) is also fine.
 >
-> What it breaks is your own reasoning. A CPU-time-based profile taken inside a unit will tell you
-> your simulator is idle when it is saturated, and comparing it against a profile from your own
-> machine will make a real regression look like an improvement. Use wall-clock, or profile
-> locally — which is what this document asks you to do anyway.
+> Under that setup, a CPU-time-based profile taken inside a unit told you your simulator was idle
+> when it was saturated. Wall-clock, or profiling locally, avoids the question entirely — which is
+> what this document asks you to do anyway.
 
 ## 1. Annotate your hot path with NVTX ranges
 

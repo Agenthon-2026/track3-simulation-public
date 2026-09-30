@@ -43,5 +43,5 @@ gated on using it. What is rewarded is the outcome — throughput among admissib
 - The nsys → SimProfile recipe (`docs/PROFILING.md`) and the optional CUDA/CuPy starter
   (`baselines/gpu_starter/`) are both in this repository now. Each is one route, not the expected
   one, and the starter passes the gates itself.
-- What the sandbox costs your simulator, by workload shape — and why syscalls and IPC are the only
-  expensive part: `baselines/README.md` §3.
+- What the gVisor sandbox of an earlier setup cost, by workload shape (history; Development and
+  Final runs use `runc`): `baselines/README.md` §3.

@@ -12,8 +12,7 @@ self-reported throughput. Official Final timing remains a separate release requi
 > **No throughput figure on this page was measured on the evaluation fleet, and the ~65,000
 > events/sec ABIDES baseline is withdrawn as a target.** The 2026-06-23 figures were written when
 > this repository was created and the benchmark hardware was still described as "4× AMD EPYC vCPU"
-> with an unnamed GPU; they predate both the B200 hosts and the gVisor sandbox every ranked run now
-> executes under. The hardware in §3 was measured on 2026-08-20 — the throughput numbers were not.
+> with an unnamed GPU; they predate the B200 hosts. The hardware in §3 was measured on 2026-08-20 — the throughput numbers were not.
 > What replaces 65,000 is the one figure this repository can reproduce from its own files: the 65
 > shipped reference runs, **geometric mean 13,793 events/sec** (range 3,471–18,046), on hardware
 > that is not recorded. See §1 for the derivation and §3 for the informational baseline
@@ -83,12 +82,12 @@ PY
 **What the measured row is not.** The hardware those runs used is not recorded, and their
 `wall_clock_sec` covers the simulation loop rather than the whole container, so 13,793 is not a
 fleet measurement either — it is the only throughput number in this repository you can reproduce
-from what ships in it. It is also not explained away by the sandbox: per §3 a Python event loop is
-nearly free under gVisor (allocation 0.3%, heap −0.9%, i.e. noise).
+from what ships in it. It is also not explained away by the container runtime: Development and
+Final runs use `runc`, and even under the gVisor sandbox measured in §3 a Python event loop was
+nearly free (allocation 0.3%, heap −0.9%, i.e. noise).
 
 **No fleet-measured baseline exists yet.** `timer.py --runs 5 --discard-warmup` has been named here
-as the protocol since 2026-06-23, but no run of it on the B200 hosts, under the gVisor sandbox every
-ranked run executes in, is recorded. Until one is — tracked in
+as the protocol since 2026-06-23, but no run of it on the B200 hosts under `runc` is recorded. Until one is — tracked in
 a tracking issue the organizers will open with the measurement — the honest statement is
 that the fleet baseline is unknown and a measured one is coming. Measure your own machine
 (`throughput/timer.py`) and improve on that; ranking is relative to other submissions, not to any
@@ -126,8 +125,8 @@ python regression_suite/build_reference_cache.py
 ./baselines/build_and_validate.sh           # docker build + regression_suite/run_regression.py
 ```
 
-These are local regression checks. They do not establish the final runtime identity or an
-official throughput score. If a check fails, preserve the supplied reference traces and
+These are local regression checks. They do not establish an official throughput score; Final
+timing runs under `runc` on the organizers' host. If a check fails, preserve the supplied reference traces and
 diagnose the build, patches, random streams and outputs; do not replace the references to
 make a candidate pass.
 
@@ -309,9 +308,9 @@ vectorized reference is a performance reference point only.
 
 **65,000 is withdrawn as a target.** This table previously gave it the role "ranking floor
 (`t3.throughput_nonimproving` at or below)", which made it the figure to beat. It was never run on
-the B200 workers or under gVisor, and this repository's own shipped reference runs sit
-about 4.7× below it on the same engine — a gap the sandbox does not explain (per §3 a Python event
-loop is nearly free under gVisor: allocation 0.3%, heap −0.9%, i.e. noise). Withdrawing it does not
+the B200 workers, and this repository's own shipped reference runs sit about 4.7× below it on the
+same engine — a gap the container runtime does not explain (even under the gVisor sandbox measured
+in §3 a Python event loop was nearly free: allocation 0.3%, heap −0.9%, i.e. noise). Withdrawing it does not
 change any score: the value survives only as `ABIDES_BASELINE_EVENTS_PER_SEC` in
 `qfbench2_track_simulation/domain.py`, a pinned historical input to the clip-ceiling derivation that
 no scoring path reads.
@@ -365,15 +364,16 @@ compiling for, not as a resource budget):
 | CUDA toolkit on host | **13.0.3** (driver supports up to 13.0) |
 | CPU | **Intel Xeon Platinum 8570** |
 | OS | Ubuntu 24.04.4 LTS, kernel 6.11.0-1016-nvidia |
-| Container stack | Docker 29.7.2, gVisor `release-20260803.0`, nvidia-container-toolkit 1.19.1-1 |
+| Container stack | Docker 29.7.2, container runtime `runc`, nvidia-container-toolkit 1.19.1-1 |
 
-Inside a task container you will see kernel `4.19.0-gvisor`, the B200 with all 183359 MiB, and
-driver 580.173.02.
+Development and Final runs use `runc`, so a task container shares the host kernel: you will see
+kernel 6.11.0-1016-nvidia, the B200 with all 183359 MiB, and driver 580.173.02.
 
-### What the sandbox costs, by workload shape
+### What gVisor cost, by workload shape (history)
 
-Your run is sandboxed under gVisor. That is not a flat tax, and knowing where it falls is the
-difference between optimising the right thing and the wrong thing for a week.
+An earlier setup sandboxed units under gVisor (`release-20260803.0`). Development and Final runs
+now use `runc`, so none of this sandbox cost applies to them. The measurements are kept because
+they compare the two runtimes on these hosts:
 
 Measured by NVIDIA on 2026-08-25 under a real Track 3 card's caps (`--cpus=4 --memory=16G`), five
 repeats on two hosts, wall-clock throughout, stable to within a point across hosts:
@@ -386,21 +386,15 @@ repeats on two hosts, wall-clock throughout, stable to within a point across hos
 | raw syscalls | 718,093 | 4,755,762 | **84.9%** |
 | loopback socket IPC | 281,129 | 1,105,189 | **74.6%** |
 
-**GPU work has no measurable steady-state penalty** — 0.0218 s against 0.0217 s on a repeated
-matmul. The only GPU cost is context creation on the first CUDA call, which varied between +65 ms
-and +365 ms across hosts. That lands inside your timed window, so pay it once and reuse the
-context rather than creating one per scenario.
+Under gVisor, **GPU work had no measurable steady-state penalty**: 0.0218 s against 0.0217 s on a
+repeated matmul. Its only GPU cost was context creation on the first CUDA call, which varied between
++65 ms and +365 ms across hosts. Creating a CUDA context lands inside your timed window on any
+runtime, so pay it once and reuse the context rather than creating one per scenario.
 
-**The shape of this is good news for a discrete-event simulator.** Object churn and heap operations
-— the bulk of a Python event loop — are free. What is expensive is precisely what gVisor
-intercepts: raw syscalls and loopback IPC.
-
-So the guidance is specific rather than vague. **The sandbox does not tax your event loop, your
-allocations, or your GPU work. It taxes syscalls and IPC.** A design that batches writes and avoids
-a syscall per event pays almost nothing for running sandboxed. One that treats syscalls as free —
-per-event logging, a socket between worker processes, an `fsync` in the hot path — loses most of
-its speedup to the sandbox rather than to its own algorithm, and will read as an algorithmic
-disappointment when it is not one.
+For a discrete-event simulator the sandbox's shape was benign: object churn and heap operations,
+the bulk of a Python event loop, were free under it, and what it taxed was what gVisor intercepts,
+raw syscalls and loopback IPC. Under `runc` that tax does not apply, though batching writes and
+avoiding a syscall per event still pays on any runtime.
 
 An earlier figure of "~9% overhead" circulated between us and NVIDIA. It came from a spin loop,
 which measures only the first row of that table; treat it as superseded.

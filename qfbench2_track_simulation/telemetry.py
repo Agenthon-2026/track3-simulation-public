@@ -68,6 +68,7 @@ from qfbench2_common.contracts import (
     stable_output_binding,
     telemetry_admissible_for_timing,
 )
+from qfbench2_common.contracts import run_record as _run_record
 from qfbench2_common.contracts.codes import FailureCode
 from qfbench2_common.contracts.run_record import derive_execution_fault
 from qfbench2_common.failure_labels import FailureLabel, public_failure_code
@@ -270,19 +271,31 @@ def require_repeat_evidence(record: RunRecord, plan: EvaluationPlan) -> None:
         )
 
 
+#: The Runner's refusal codes (C2 1.3.0) and the public failure code each one maps to. Read from the
+#: toolkit, never copied, so the Hub and this scorer cannot drift. Empty on a toolkit older than
+#: v2.5.1, whose records never carry a refusal.
+_REFUSAL_FAILURE_CODES: Mapping[str, FailureCode] = getattr(
+    _run_record, "PARTICIPANT_REFUSAL_FAILURE_CODES", {}
+)
+
+
 class RunFailed(ParticipantFailure):
     """The Runner recorded a failed run: a participant failure, W = 0.0, kept in the denominator.
 
-    Carries the public code the platform reports for the same lifecycle: ``resource_timeout``,
-    ``resource_oom``, ``image_unusable`` for a container that never started, and
-    ``container_crashed`` otherwise. ``label`` is the one label whose public code is exactly that
-    code, or ``None`` where the closed label set has none (``container_crashed``); ``detail["code"]``
-    carries the code either way, and the public projection keeps it.
+    Carries the public code the platform reports for the same record. A signed
+    ``participant_refusal`` (C2 1.3.0) takes the toolkit's code for it. Otherwise the lifecycle
+    decides: ``resource_timeout``, ``resource_oom``, ``image_unusable`` for a container that never
+    started, and ``container_crashed`` otherwise. ``label`` is the one label whose public code is
+    exactly that code, or ``None`` where the closed label set has none (``container_crashed``);
+    ``detail["code"]`` carries the code either way, and the public projection keeps it.
     """
 
     def __init__(self, record: RunRecord) -> None:
         life = record.lifecycle
-        if life.timed_out:  # before OOM, as the platform checks them
+        refusal = getattr(record, "participant_refusal", None)  # absent before C2 1.3.0
+        if refusal is not None:
+            code = FailureCode(_REFUSAL_FAILURE_CODES[refusal])
+        elif life.timed_out:  # before OOM, as the platform checks them
             code = FailureCode.RESOURCE_TIMEOUT
         elif life.oom_killed:
             code = FailureCode.RESOURCE_OOM
@@ -342,6 +355,12 @@ def require_failure_evidence(record: RunRecord, plan: EvaluationPlan) -> None:
     """
     require_official_telemetry(record)
     require_exclusive_instance(record)
+    refusal = getattr(record, "participant_refusal", None)  # absent before C2 1.3.0
+    if refusal is not None and refusal not in _REFUSAL_FAILURE_CODES:
+        raise OrganizerFault(
+            f"unit {record.unit_handle!r}: participant_refusal {refusal!r} has no public failure "
+            "code in the installed toolkit, so it is not charged to the participant"
+        )
     fault = derive_execution_fault(record.lifecycle)
     if fault.infrastructure:
         # A C2 1.2 record already says so through its rankability; a legacy 1.1.0 record carries

@@ -175,11 +175,11 @@ including creation and an image pull when needed. The separate ingestion-stage c
 Simulation remains offline and receives no House allocation. The planned House timing release
 for other tracks changes neither these clocks nor Simulation's compute or network limits.
 
-See the [Development runtime guide](https://github.com/Agenthon-2026/Agenthon2026-public/blob/v2.4.4/docs/DEVELOPMENT-RUNTIME.md)
+See the [Development runtime guide](https://github.com/Agenthon-2026/Agenthon2026-public/blob/v2.5.1/docs/DEVELOPMENT-RUNTIME.md)
 for process, temporary-space and output limits. The card's `disk = "10G"` is not used by this
 launcher and does not establish a writable 10 GiB workspace. The provisional Development
 profile and shared queue do not certify official Final timing. Follow the
-[image submission guide](https://github.com/Agenthon-2026/Agenthon2026-public/blob/v2.4.4/docs/IMAGE-SUBMISSIONS.md)
+[image submission guide](https://github.com/Agenthon-2026/Agenthon2026-public/blob/v2.5.1/docs/IMAGE-SUBMISSIONS.md)
 for public pulls or an organizer-confirmed private mirror.
 
 ### Firewall
@@ -381,7 +381,9 @@ runner, never read from your `events.json`**. Its current per-unit requirements 
    the runner's own wall clock. The unit's score is the **median** of those rates. That wall clock
    is the Docker daemon's own window for your container, from when it starts to when it exits
    (`State.StartedAt` to `State.FinishedAt`); creating, inspecting and removing the container are
-   not counted.
+   not counted. The window does include the container runtime's own start-up (for a GPU container,
+   the GPU setup), which is the same for every submission. Final timing runs use `runc`, the same
+   container runtime as Development.
 5. Each run is limited to 300 seconds; a run that reaches the limit is stopped. A run that fails
    because of the submission (it reaches that limit, crashes or runs out of memory) scores the unit
    0, and the unit stays in the average. The local timer defaults to 1,800 seconds per run; set
@@ -412,8 +414,9 @@ python throughput/timer.py --image <your-image>:latest \
 ```
 
 The local timer varies seeds and defaults to five runs with the first discarded. Those are
-developer-tool defaults, not the final evaluation plan. Official repeat counts, warm-up treatment
-and measured runtime identity must be published with that plan. Local throughput is a guide for
+developer-tool defaults, not the final evaluation plan. Official repeat counts and warm-up treatment
+come from that plan, and Final timing runs use the `runc` container runtime, the same as
+Development. Local throughput is a guide for
 your own comparisons, not a predictor of your leaderboard rank.
 
 ### Secondary diagnostics (local reports)
@@ -445,16 +448,16 @@ All scoring logic lives in the shared toolkit, which ships from its own public r
 Install it from there:
 
 ```bash
-# Pin toolkit v2.4.4: the scorer in this repository imports from it at package import.
-# The installed package reports version 2.4.4.
-pip install "qfbench2-common[data] @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@v2.4.4#subdirectory=common"
+# Pin toolkit v2.5.1: the scorer in this repository imports from it at package import.
+# The installed package reports version 2.5.1.
+pip install "qfbench2-common[data] @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@v2.5.1#subdirectory=common"
 ```
 
 > ### Install the pinned tag, not a branch
 >
-> `Agenthon-2026/Agenthon2026-public` carries the `qfbench2-common` package, and `v2.4.4` is the
+> `Agenthon-2026/Agenthon2026-public` carries the `qfbench2-common` package, and `v2.5.1` is the
 > tag CI installs (`QFBENCH2_COMMON_REF` in `.github/workflows/ci.yml`) and the tag whose descriptor
-> contract matches what the scorer accepts. **This version is required, not just recommended:**
+> contract matches what the scorer accepts. **At least v2.4.4 is required, not just recommended:**
 > the scorer imports `digest_members` and `stable_output_binding` from it at
 > `import qfbench2_track_simulation`, so an older toolkit fails with
 > `cannot import name 'digest_members'`. Reinstall the toolkit with
@@ -483,7 +486,7 @@ baseline image. Run every step from this repository's root. The Docker build fet
 ABIDES source and applies all four required patches in order.
 
 ```bash
-pip install "qfbench2-common[data] @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@v2.4.4#subdirectory=common"
+pip install "qfbench2-common[data] @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@v2.5.1#subdirectory=common"
 docker build --platform=linux/amd64 -t track3-abides-baseline:latest baselines/
 ```
 

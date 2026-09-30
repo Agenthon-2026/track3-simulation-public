@@ -26,10 +26,10 @@ fault instead of quietly compressing the board.
 ## The derivation, from published figures only
 
 **None of the events/sec figures below was measured on the evaluation fleet.** They were written
-2026-06-23 against the hardware this repository described at the time — not the B200 hosts, and not
-the gVisor sandbox every ranked run executes under. They are used here only to derive a ceiling
-that must sit ABOVE every attainable honest score, which is the one direction in which being wrong
-is free (see the asymmetry below). Do not read any of them as a target.
+2026-06-23 against the hardware this repository described at the time, not the B200 hosts. They
+are used here only to derive a ceiling that must sit ABOVE every attainable honest score, which is
+the one direction in which being wrong is free (see the asymmetry below). Do not read any of them
+as a target.
 
 | Quantity | Value | Provenance |
 |---|---|---|
@@ -105,7 +105,7 @@ PARTICIPANT_FAILURE_SCORE = 0.0
 #: figures rather than numbers chosen to make it come out somewhere.
 #:
 #: **NOT MEASURED ON THE EVALUATION FLEET.** All three date to 2026-06-23 and describe the hardware
-#: this repository described then — not the B200 hosts and not the gVisor sandbox. They are
+#: this repository described then, not the B200 hosts. They are
 #: DOCUMENTATION ONLY: nothing in this package or in the scorer reads them, so their values do not
 #: move any score. Only :data:`MAX_PER_MARKET_EVENTS_PER_SEC` below feeds the clip ceiling.
 

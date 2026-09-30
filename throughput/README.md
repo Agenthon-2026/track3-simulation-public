@@ -5,9 +5,9 @@
 Use this directory for local measurements and diagnostics. The current provisional Development
 service also uses the developer scoring profile (`rankable = False`), with checked self-reported
 throughput on a shared worker queue. Its practice scores and standings are not official comparable
-timing. The production timing requirements below belong to the planned official Final path;
-its runtime identity, timing isolation, repeat/warm-up commitment and paired repeat
-producer/validator still need release validation. See [the timing profiles](../README.md#how-throughput-is-measured).
+timing. The production timing requirements below belong to the planned official Final path,
+which runs under the `runc` container runtime, the same as Development; its timing isolation,
+repeat/warm-up commitment and paired repeat producer/validator still need release validation. See [the timing profiles](../README.md#how-throughput-is-measured).
 
 > ## Nothing in this directory produces an official number
 >

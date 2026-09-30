@@ -19,9 +19,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import pandas as pd  # noqa: E402
+import pytest  # noqa: E402
 
 import _contract_fixtures as F  # noqa: E402
 from qfbench2_common.contracts import OrganizerFault, ParticipantFailure  # noqa: E402
+from qfbench2_common.contracts import run_record as C2  # noqa: E402
 from qfbench2_common.failure_labels import (  # noqa: E402
     ORGANIZER_FAULT_LABELS,
     FailureLabel,
@@ -353,6 +355,84 @@ def test_a_legacy_create_timeout_is_held_as_the_hub_holds_it(tmp_path: Path) -> 
     ctx = _failed_ctx(tmp_path, raw)
     exc = _expect(OrganizerFault, lambda: build_verifier(ctx).run(ctx))
     assert "create_timeout" in str(exc)
+
+
+_REFUSALS = getattr(C2, "PARTICIPANT_REFUSAL_FAILURE_CODES", None)
+_needs_refusal = pytest.mark.skipif(_REFUSALS is None, reason="toolkit older than v2.5.1 (C2 1.3.0)")
+
+
+def _refused_raw(refusal: str | None, runs: int = 5) -> dict:
+    """A C2 1.3.0 body: a clean exit whose output the Runner refused (or did not, for ``None``)."""
+    raw = F.run_record_mapping(n_events=N_ROWS)
+    raw["repeats"] = raw["repeats"][:runs]
+    raw["schema_version"] = "1.3.0"
+    raw["execution_fault"] = {"attribution": "none", "reason": "none", "evidence": "host_lifecycle"}
+    raw["participant_refusal"] = refusal
+    raw["participant_outcome"] = "failure" if refusal else "success"
+    return raw
+
+
+@_needs_refusal
+def test_a_refusal_reports_the_toolkits_code_for_it(tmp_path: Path) -> None:
+    """The code comes from the toolkit's own mapping, so the Hub and this scorer report the same."""
+    assert _REFUSALS
+    for i, (refusal, code) in enumerate(_REFUSALS.items()):
+        labels, detail = _charged(_failed_ctx(tmp_path / str(i), _refused_raw(refusal, runs=3)))
+        assert detail["code"] == code.value, refusal
+        assert detail["repeats_recorded"] == 3
+        # Exactly the one label whose public code is this code; none where the closed label set has
+        # none (`no_output`, like `container_crashed`), and then detail alone carries the code.
+        label = next((lb for lb in FailureLabel if public_failure_code([lb]) == code), None)
+        assert labels == ([label] if label else []), refusal
+
+
+@_needs_refusal
+def test_a_refusal_is_held_without_admissible_telemetry_on_an_idle_instance(tmp_path: Path) -> None:
+    raw = _refused_raw("repeats_differ")
+    raw["telemetry"] = F.telemetry_block(exclusive=False)
+    ctx = _failed_ctx(tmp_path, raw)
+    _expect(OrganizerFault, lambda: build_verifier(ctx).run(ctx))
+
+
+@_needs_refusal
+def test_a_refusal_needs_the_same_evidence_as_any_failure(tmp_path: Path) -> None:
+    """A refusal is held, never charged, on an unrankable run, on an unattested record, or past the
+    plan's repeat count. The telemetry checks above are also run by the gate itself, so these are
+    the cases only ``require_failure_evidence`` catches."""
+    raw = _refused_raw("repeats_differ", runs=3)
+    raw["repeats"][0]["rankability"] = {"state": "unrankable", "unmet_controls": ["telemetry_absent"]}
+    ctx = _failed_ctx(tmp_path / "unrankable", raw)
+    _expect(OrganizerFault, lambda: build_verifier(ctx).run(ctx))
+
+    ctx = _failed_ctx(tmp_path / "unattested", _refused_raw("trace_missing", runs=3), sign=False)
+    _expect(OrganizerFault, lambda: build_verifier(ctx).run(ctx))
+
+    raw = _refused_raw("no_stable_output", runs=5)
+    raw["repeats"].append(dict(raw["repeats"][-1], index=5))
+    ctx = _failed_ctx(tmp_path / "too_many", raw)
+    _expect(OrganizerFault, lambda: build_verifier(ctx).run(ctx))
+
+
+@_needs_refusal
+def test_a_refusal_the_toolkit_cannot_map_is_held(tmp_path: Path, monkeypatch) -> None:
+    """Unreachable with a matching toolkit, which rejects unknown codes when it parses the record;
+    held rather than charged under a guessed code, as the Hub does."""
+    ctx = _failed_ctx(tmp_path, _refused_raw("sidecar_invalid", runs=3))
+    monkeypatch.setattr(
+        telemetry,
+        "_REFUSAL_FAILURE_CODES",
+        {k: v for k, v in telemetry._REFUSAL_FAILURE_CODES.items() if k != "sidecar_invalid"},
+    )
+    exc = _expect(OrganizerFault, lambda: build_verifier(ctx).run(ctx))
+    assert "no public failure code" in str(exc)
+
+
+@_needs_refusal
+def test_a_record_with_no_refusal_still_ranks(tmp_path: Path) -> None:
+    ctx = official_ctx(tmp_path)
+    ctx["run_record"] = F.bind_output(_refused_raw(None), ctx["unit_dir"], ctx["output_dir"])
+    verdict = build_verifier(ctx).run(ctx)
+    assert verdict.admissible, verdict.gate_results
 
 
 def test_an_unattested_failure_is_held_not_charged(tmp_path: Path) -> None:
