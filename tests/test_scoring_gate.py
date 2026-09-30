@@ -414,6 +414,16 @@ def test_a_refusal_needs_the_same_evidence_as_any_failure(tmp_path: Path) -> Non
 
 
 @_needs_refusal
+def test_a_refusal_on_an_unrankable_record_is_held(tmp_path: Path) -> None:
+    """The record itself, not only one repeat, may be unrankable. A refusal on it is held."""
+    raw = _refused_raw("repeats_differ", runs=3)
+    raw["rankability"] = {"state": "unrankable", "unmet_controls": ["tier_unenforced"]}
+    ctx = _failed_ctx(tmp_path, raw)
+    exc = _expect(OrganizerFault, lambda: build_verifier(ctx).run(ctx))
+    assert "not under a valid production profile" in str(exc)
+
+
+@_needs_refusal
 def test_a_refusal_the_toolkit_cannot_map_is_held(tmp_path: Path, monkeypatch) -> None:
     """Unreachable with a matching toolkit, which rejects unknown codes when it parses the record;
     held rather than charged under a guessed code, as the Hub does."""
