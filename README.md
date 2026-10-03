@@ -165,6 +165,36 @@ breakdown.
 `events_per_sec` together, and a missing key fails the entire batch with
 `"non-numeric batch_events fields"` — a message that does not name the field it wanted.
 
+### Output folder rules
+
+Everything your image leaves in `/output` is checked, including each batch sub-scenario's folder:
+its files count toward the file limits below, and the folder is one level of nesting. After your
+process exits, the organizers' output checker reads the whole tree and refuses it if it has any
+of these:
+
+- more than 256 files, more than 4,096 files and folders together, or a folder nested 8 or more
+  levels deep, even an empty one (a file can sit at most seven folders down, as in
+  `/output/a/b/c/d/e/f/g/file.txt`);
+- a symbolic link (even one pointing inside the folder), a hard link, or a special file such as a
+  named pipe or socket;
+- a file with a setuid, setgid or sticky bit;
+- a file larger than 256 MiB, more than 256 MiB in total, or a file more than 64 times larger than
+  the disk space it occupies (a heavily sparse file);
+- two file paths that differ only in letter case or Unicode form (`Trace.parquet` and
+  `trace.parquet`), a name that is not valid UTF-8 or not in Unicode NFC form, a name with a
+  backslash or a control character, or a name directly in `/output` that starts with a letter and
+  a colon (such as `C:data`);
+- no files at all (empty folders do not count).
+
+In Development, a refused tree scores the unit `no_output` when your process exited 0. A non-zero
+exit is scored `container_crashed`, or `resource_timeout` / `resource_oom` if the run was stopped
+for time or memory, whatever the tree holds. In the Final, a refused tree fails that unit, like any
+other failure caused by the submission. The 256 MiB limits are the same in the Final.
+
+To stay well inside the limits, write traces as compressed parquet, as the reference does, and
+don't write `message_trace.parquet` on units whose card has `requires_message_ledger = false`.
+`/tmp` inside the container is smaller (64 MiB), so write large output directly under `/output`.
+
 ### Development resources
 
 The selected Development launcher applies a **4-CPU quota** and **16 GiB memory** per unit,
