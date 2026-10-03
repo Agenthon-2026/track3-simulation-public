@@ -36,8 +36,9 @@ English executive summary a finance student can follow.
 ## Hardware and resource contract (frozen at the 2026-08-10 compute-caps freeze)
 
 The current **provisional Development** service uses a shared worker queue and the developer
-scoring profile (`rankable = False`). It provides practice feedback from checked self-reported
-throughput; it does not provide official comparable timing or a dedicated timing instance.
+scoring profile (`rankable = False`). Its score is the verified event count over the container
+time the harness measured, one run on a shared host; it does not provide official comparable
+timing or a dedicated timing instance.
 
 The planned **official Final** timing contract requires the **same pinned, otherwise-idle,
 single-GPU instance** — pin the *instance*, not just the SKU — with submissions run strictly

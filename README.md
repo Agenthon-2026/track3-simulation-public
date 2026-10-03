@@ -125,12 +125,16 @@ The `events_per_sec` value must be consistent with `n_events ÷ wall_clock_sec` 
 ±5%. The harness verifies this consistency check and disqualifies submissions that report
 inflated throughput.
 
-On the Development board your `events_per_sec` is a self-report: no organizer clock times a
-Development run, so the number you write is the score input. It is therefore bounded — a
-self-reported rate above 1e9 events/sec per market is refused as implausible (for a batch unit,
-1e9 times its number of markets), and any admitted rate counts as at most 1e7 events/sec per unit,
-batch units included. This applies to the Development board only; on the Final path the rate is
-measured by the organizers' host, so there is no self-reported magnitude left to bound.
+On the Development board your score is **measured by the organizers' harness**: the verified event
+count (your trace's real row count; for a batch unit, the total across its markets) divided by the
+container time the harness recorded for that unit. That time runs from creating your container to
+removing it, so it includes start-up and teardown, and it is a single run on a shared Development
+host. As in the Final, the count must equal the reference's exactly on every unit, Tier B included;
+a trace with more or fewer rows is refused. The Final ranks verified events over the container's
+start-to-exit window, measured five times on a dedicated host (see
+[the timing profiles](#how-throughput-is-measured)). Your own `events_per_sec` is not ranked: it is
+still checked for consistency as above, and a self-reported rate above 1e9 events/sec per market
+(for a batch unit, 1e9 times its number of markets) is still refused as implausible.
 
 ### `message_trace.parquet`
 
@@ -321,7 +325,8 @@ ordering. The only numeric tolerance is ±1 µs on event timestamps.
 
 **Tier B** (Families 2, 4, 5 — statistical): your mid-price series must be statistically
 close to the reference — return-distribution KS ≤ 0.08 (the same calibrated KS check as the
-stylized-fact gate) and time-averaged spread within ±10 bps.
+stylized-fact gate) and time-averaged spread within ±10 bps. On every unit, Tier B included, the
+trace must also carry exactly the reference's event count.
 
 **There is no majority rule, in either tier.** Every scenario is graded on its own and every
 scenario must pass; a single failure anywhere is inadmissible. Earlier revisions of this page said
@@ -380,9 +385,10 @@ under `run_outputs/` and `reference_traces/`.
 ### Provisional Development
 
 The current Development service uses a shared worker queue and the developer scoring profile
-(`build_developer_verifier`), with `rankable = False`. Its per-unit throughput comes from your
-reported `events_per_sec`, checked for consistency and subject to the existing admissibility
-gates. Report real event counts and elapsed time. Development scores and displayed standings
+(`build_developer_verifier`), with `rankable = False`. Its per-unit throughput is the verified
+event count over the container time the harness measured, from creating your container to removing
+it; your reported `events_per_sec` is checked for consistency but not ranked. Report real event
+counts and elapsed time. Development scores and displayed standings
 are practice feedback; they do not establish official comparable timing across submissions or
 Final ranking. Development does not promise a dedicated, otherwise-idle timing instance.
 
@@ -408,7 +414,9 @@ runner, never read from your `events.json`**. Its current per-unit requirements 
    the same stable output files (above) and the same event count as the run that was scored. A
    submission whose runs disagree is refused rather than having its best run kept.
 4. Each repeat's rate is the runner's own event count (the parquet footer row count) divided by
-   the runner's own wall clock. The unit's score is the **median** of those rates. That wall clock
+   the runner's own wall clock. On every unit, Tier B included, the trace must carry exactly the
+   reference's event count, because that count is the ranked numerator. The unit's score is the
+   **median** of those rates. That wall clock
    is the Docker daemon's own window for your container, from when it starts to when it exits
    (`State.StartedAt` to `State.FinishedAt`); creating, inspecting and removing the container are
    not counted. The window does include the container runtime's own start-up (for a GPU container,
@@ -443,8 +451,9 @@ python throughput/timer.py --image <your-image>:latest \
     --scenario regression_suite/scenarios/as06_throughput_fast.json
 ```
 
-The local timer varies seeds and defaults to five runs with the first discarded. Those are
-developer-tool defaults, not the final evaluation plan. Official repeat counts and warm-up treatment
+The local timer runs every repeat on the scenario's own seed, as the Final does, and defaults
+to five runs with the first discarded (`--vary-seeds` gives each run a different derived seed
+instead). Those are developer-tool defaults, not the final evaluation plan. Official repeat counts and warm-up treatment
 come from that plan, and Final timing runs use the `runc` container runtime, the same as
 Development. Local throughput is a guide for
 your own comparisons, not a predictor of your leaderboard rank.

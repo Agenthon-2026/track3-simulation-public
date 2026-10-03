@@ -35,8 +35,9 @@ factory, and stamps ``rankable = False`` on everything it emits.
    retained by the C2 record. This consumer requires the matching producer and coordinated release;
    it does not establish that a real repeat launcher or official timing service has been deployed.
 4. **The numerator is the Runner's, and it must equal the reference.** R-3 gives the row count to
-   the Runner; Track 3 verifies it against the organizer's reference count. A padded trace is
-   refused at the numerator as well as by the semantic gate, so extra rows can never buy rank.
+   the Runner; Track 3 verifies it against the organizer's reference count on every unit, Tier B
+   included, where the statistical gate does not compare counts. A padded trace is refused at the
+   numerator, so extra rows can never buy rank.
 
 ## Fault attribution
 
@@ -591,9 +592,10 @@ def ranked_timing(
 ) -> RankedTiming:
     """The ranked events/sec for one unit, or an exception naming whose fault it is.
 
-    ``reference_event_count`` is the organizer's deterministic count for this unit. When supplied,
-    the Runner's count must equal it exactly — the padding defence at the numerator, independent of
-    the semantic gate that also refuses extra rows.
+    ``reference_event_count`` is the organizer's deterministic count for this unit, and it is
+    required: the Runner's count must equal it exactly on every unit — the padding defence at the
+    numerator, which a Tier B unit's statistical gate does not provide. Leaving it out is an
+    organizer fault, never an unchecked rate.
     """
     require_official_telemetry(record)
     require_exclusive_instance(record)
@@ -616,8 +618,13 @@ def ranked_timing(
     _assert_repeats_reproduce_scored_tree(
         record, unit_dir=Path(unit_dir), output_dir=Path(output_dir)
     )
+    if reference_event_count is None:
+        raise OrganizerFault(
+            f"unit {record.unit_handle!r}: no reference event count was supplied. The ranked "
+            "numerator must equal it on every unit, so a rate cannot be ranked without it."
+        )
     n_events = trusted_event_count(record, sub_names=declared_subs)
-    if reference_event_count is not None and n_events != reference_event_count:
+    if n_events != reference_event_count:
         raise ParticipantFailure(
             f"unit {record.unit_handle!r}: the emitted trace has {n_events} row(s) but the "
             f"deterministic reference has {reference_event_count}. The row count is the ranked "

@@ -138,8 +138,9 @@ COMPETITIVE_BAND_EVENTS_PER_SEC = (150_000.0, 600_000.0)
 MAX_PER_MARKET_EVENTS_PER_SEC = 1e7
 
 #: The DEVELOPMENT plausibility ceiling on a single market's SELF-REPORTED events/sec. Read only by
-#: `scoring._developer_plausibility`, where the submission's own number is the score input and no
-#: organizer clock exists, so a self-report above it is refused as physically implausible.
+#: `scoring._developer_plausibility`, which refuses a self-report above it as physically
+#: implausible. The Development board now scores the harness-measured container time, so there the
+#: self-report is only a consistency check; a local run with no C2 record still scores it.
 #:
 #: Separate from :data:`MAX_PER_MARKET_EVENTS_PER_SEC` because the two do different jobs. That one
 #: derives the Final clip domain, which `assert_domain_max_covers_roster` ties to the Hub's C1 plan,
@@ -148,7 +149,6 @@ MAX_PER_MARKET_EVENTS_PER_SEC = 1e7
 #:
 #: 1e7 used to serve both, derived as more than 10x the top of a competitive band that was later
 #: withdrawn as never measured. It is NOT derived from any measurement of a submission: the
-#: Development path has no organizer clock, so nothing on it can be measured by us, and the
 #: single-market rates reported in track3-simulation-public#19 are the submission's OWN
 #: ``events.json`` self-reports. The organizers confirmed which gate refused those units, not that
 #: their rates were real. Do not restate them here or anywhere else as an organizer measurement.

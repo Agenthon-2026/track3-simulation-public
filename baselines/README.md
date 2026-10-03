@@ -5,8 +5,8 @@
 Use the ABIDES baseline to check your simulator and compare local performance. Correctness
 determines admission; an admissible simulator remains ranked even below the recorded baseline
 rate. `throughput/timer.py` is a local developer tool. The current Development service uses
-provisional developer-profile scoring on a shared queue (`rankable = False`), based on checked
-self-reported throughput. Official Final timing remains a separate release requirement; see
+provisional developer-profile scoring on a shared queue (`rankable = False`), based on the
+container time its harness measures. Official Final timing remains a separate release requirement; see
 [the timing profiles](../README.md#how-throughput-is-measured).
 
 > **No throughput figure on this page was measured on the evaluation fleet, and the ~65,000
@@ -335,8 +335,9 @@ were frozen when those traces were generated; their hardware is not recorded. Th
 does not re-run ABIDES on the evaluation instance and is not a measured same-instance speedup.
 
 That is also why this label is informational rather than disqualifying: it compares the
-submission's per-unit rates against rates frozen on unrecorded hardware. Development uses
-checked self-reported rates; the planned official Final path requires host-measured rates.
+submission's per-unit rates against rates frozen on unrecorded hardware. Development uses one
+harness-measured run on a shared host; the planned official Final path measures five on a dedicated
+host.
 Neither comparison establishes a measured same-instance speedup. The label does not remove
 an admissible score or standing.
 

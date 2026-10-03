@@ -153,8 +153,8 @@ def test_the_host_metrics_ceiling_literal_agrees_with_the_single_definition() ->
 def test_the_dev_ceiling_sits_an_order_of_magnitude_above_the_highest_self_report() -> None:
     """The Development ceiling clears the fastest self-report anyone has actually submitted.
 
-    The figure below is a SELF-REPORT from track3-simulation-public#19, not a measurement: the
-    Development path has no organizer clock, so no rate on it is measured by us. It is used only as
+    The figure below is a SELF-REPORT from track3-simulation-public#19, not a measurement by us.
+    It is used only as
     an existence proof that real submissions report rates of this order, which is why a 1e7 ceiling
     refused them; the ceiling itself is set by the asymmetry in `domain.py` (too high costs nothing
     on a board stamped rankable=False, too low deletes real ranking information).

@@ -67,14 +67,16 @@ and all of Agent B in one step, or emitting the fill events in the wrong order.
 This family also exercises:
 - **Partial fills** — a single order that consumes multiple resting orders generates one
   fill event per resting order consumed, in strict price-then-time order.
-- **Cancel/replace atomicity** — an agent cancels and resubmits an order; the cancel
-  must be fully processed before any other agent can fill the old order.
+- **Cancel and repost** — market makers cancel all their resting quotes and post a fresh
+  ladder on every wakeup. The exchange handles each cancel and each new order in the order
+  they arrive, and each cancel appears in the trace as its own `ORDER_CANCELLED` event.
 - **Self-trade prevention (STP)** — when an agent's order would trade against its own
   resting order, the exchange cancels the newer order (the `cancel_newest` policy). Family 7
   (exchange-protocol) formalizes both the `cancel_newest` and `cancel_oldest` STP baselines.
-- **Market orders** — a "buy at market" order walks the book level by level until fully
-  filled; any unfilled residual is cancelled (FAK — Fill And Kill semantics — unless the
-  scenario says otherwise).
+- **Marketable limit orders** — value and momentum traders cross the spread with a limit
+  order at the best opposite price. It fills against the resting orders at that price in
+  time order, and any unfilled remainder rests on the book at that price. No agent in the
+  baseline sends a market order.
 
 A dense, high-churn matching/replay variant (the **MR** units, `t3-mr-*`) stresses these
 same rules under heavy order churn. It is scored under Family 1 (Tier A).
@@ -112,7 +114,7 @@ Family 1 scenarios stress the same rules harder along these axes:
 - **Larger populations with simultaneous arrivals** — when two orders arrive at the same
   nanosecond, the tie-break rule (ascending order ID) must be applied. More agents = more
   ties = more tie-breaking pressure.
-- **Denser order lifecycles** — heavier cancel/replace activity than the public examples,
+- **Denser order lifecycles** — heavier cancel-and-repost activity than the public examples,
   exercising order-lifecycle bookkeeping.
 
 The number of sealed scenarios in this family, and their specific parameters, are not disclosed
@@ -131,13 +133,13 @@ the same Tier-A comparison, at the same tolerances, as the public ones.
    agent would trade against itself (`cancel_newest`). Cancelling the resting order instead —
    or letting the self-trade execute — diverges from the reference fill sequence.
 
-3. **Processing cancel and replace as two separate visible events.** Another agent's order
-   must not fill against the old price between the cancel half and the replace half. The
-   atomicity check detects this.
+3. **Dropping or reordering cancels.** Each cancel in the reference is its own
+   `ORDER_CANCELLED` event, in arrival order. Skipping or reordering one fails the exact
+   event coverage and ordering checks.
 
-4. **Discarding the unfilled residual of a market order silently.** A market order that
-   exhausts the book must emit an explicit `ORDER_CANCELLED` event for the unfilled
-   residual. Silently dropping the quantity is a fill-omission failure.
+4. **Cancelling the unfilled remainder of a marketable order.** The remainder of a limit
+   order that crosses the spread rests on the book; it is not cancelled. There are no market
+   orders, so there is no fill-and-kill.
 
 ---
 
@@ -161,15 +163,16 @@ ABIDES uses four types of agents:
   a drop. They amplify trends.
 - **Market makers** — post two-sided limit quotes (one buy order and one sell order at
   the same time). They profit from the spread (difference between bid and ask) and keep
-  the market liquid. When they are absent or withdraw, the spread widens dramatically.
+  the market liquid. With fewer or thinner market makers, the spread widens.
 
 Two regime configurations are tested:
 
 - **Calm regime** — low noise trader arrival rate, moderate value traders, tight market
   maker spread. The price should oscillate narrowly around fundamental value. The spread
   should be narrow and stable.
-- **Stressed regime** — high noise trader arrival rate, elevated momentum traders, market
-  makers temporarily withdrawn. The price should exhibit occasional large swings and wide
+- **Stressed regime** — high noise trader arrival rate, elevated momentum traders, and
+  fewer or thinner market makers (a wider quoted spread, fewer levels, smaller size), as the
+  scenario sets them. The price should exhibit occasional large swings and wide
   spreads.
 
 ### Exact property pinned
@@ -198,7 +201,8 @@ non-positive price or size, fails the unit before any statistic is computed.
 **This is a Tier B check.** Bit-exact comparison is not meaningful here — the market
 dynamics have statistical noise from the random agent decisions, and a slightly different
 internal RNG sequence will produce slightly different prices even with the same seed. What
-matters is that the statistical properties are the same, not the exact prices.
+matters is that the statistical properties are the same, not the exact prices. The row count must
+still match the reference's exactly, so a sequence that changes the number of events is refused.
 
 **There is no majority rule.** Every scenario is graded on its own and every scenario must pass;
 one Tier-B failure is one inadmissible unit. Earlier revisions of this page, and of
@@ -213,7 +217,7 @@ mix towards extremes in both directions:
 
 - **Momentum-dominated mixes** — the market trends strongly. A simulator that does not
   correctly amplify momentum will produce a calmer market than the reference.
-- **Noise-dominated mixes with the market makers withdrawn** — the book is thin and the spread
+- **Noise-dominated mixes with no market makers** — the book is thin and the spread
   erratic. Implementations that assume a market maker is always present will miss the spread
   tolerance.
 - **Value-dominated mixes** — rapid, tight mean reversion; the price deviates minimally from
@@ -237,9 +241,10 @@ number of sealed scenarios in this family, are not disclosed before the competit
    updates at a configurable frequency. Value traders hold stale oracle values between
    updates; they must not use the latest value mid-step if it has not yet been "published."
 
-3. **Not modeling market maker withdrawal.** In the stressed regime, market makers stop
-   posting quotes at a certain point. Implementations that keep market makers active
-   unconditionally will have a narrower spread than the reference, failing the spread check.
+3. **Ignoring the market-maker settings.** Market makers quote on every wakeup, with the
+   spread, depth and size the scenario sets; none withdraws mid-run. An implementation that
+   uses its own defaults instead produces a different spread from the reference, failing the
+   spread check.
 
 ---
 

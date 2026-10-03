@@ -160,26 +160,15 @@ def test_a_normal_developer_rate_scores_unchanged(tmp_path: Path) -> None:
     ctx = developer_ctx(tmp_path)
     verdict = build_developer_verifier(ctx).run(ctx)
     assert abs(verdict.score - N_ROWS / 1.5) < 1e-6
-    assert "score_capped_from" not in verdict.detail
 
 
-def test_a_rate_above_the_cap_is_admitted_and_scores_the_cap(tmp_path: Path) -> None:
-    """A synthetic 1.2e7 sits above the 1e7 cap and far below the 1e9 refusal line: it is admitted,
-    not zeroed, and scores exactly the cap."""
-    ctx = _developer_ctx_reporting(tmp_path, 1.2e7)
-    verdict = build_developer_verifier(ctx).run(ctx)
-    assert verdict.admissible, verdict.gate_results
-    assert verdict.score == 1e7
-    assert abs(verdict.detail["score_capped_from"] - 1.2e7) < 1.0
-
-
-def test_no_admitted_rate_scores_above_the_cap(tmp_path: Path) -> None:
-    """A self-reported rate cannot be verified on the developer path, so any admitted claim, however
-    close to the 1e9 refusal line, scores at most the 1e7 cap."""
-    ctx = _developer_ctx_reporting(tmp_path, 9e8)
-    verdict = build_developer_verifier(ctx).run(ctx)
-    assert verdict.admissible, verdict.gate_results
-    assert verdict.score == 1e7
+def test_a_fast_local_rate_scores_its_own_value(tmp_path: Path) -> None:
+    """Locally, with no C2 record, a rate above 1e7 is scored as reported (no cap)."""
+    for i, rate in enumerate((1.2e7, 9e8)):
+        ctx = _developer_ctx_reporting(tmp_path / str(i), rate)
+        verdict = build_developer_verifier(ctx).run(ctx)
+        assert verdict.admissible, verdict.gate_results
+        assert abs(verdict.score - rate) < rate * 1e-9
 
 
 def test_an_absurd_developer_rate_is_still_refused(tmp_path: Path) -> None:
@@ -188,9 +177,9 @@ def test_an_absurd_developer_rate_is_still_refused(tmp_path: Path) -> None:
     assert not verdict.admissible
 
 
-def test_a_batch_unit_is_capped_at_1e7_like_any_other_unit(tmp_path: Path) -> None:
-    """The cap is per unit, batch units included, which is where the live Development average
-    already clips every unit. Its market count does not raise it."""
+def test_a_batch_unit_scores_its_reported_rate_up_to_its_refusal_line(tmp_path: Path) -> None:
+    """A batch reports one aggregate rate. It is scored as reported, and the refusal line scales
+    with the ORGANIZER's market count (here 3 markets, so 3e9)."""
     unit = tmp_path / "bunit"
     unit.mkdir()
     (unit / "batch.json").write_text(json.dumps({"subs": [{"sub": f"sub_{i:02d}"} for i in range(3)]}))
@@ -198,11 +187,382 @@ def test_a_batch_unit_is_capped_at_1e7_like_any_other_unit(tmp_path: Path) -> No
         {
             "unit_dir": unit,
             "_batch": {"n_subs": 3},
-            "_batch_events": {"events_per_sec": 5e8, "n_scenarios": 3},
+            "_batch_events": {"events_per_sec": 2.5e9, "n_scenarios": 3},
         }
     )
-    assert detail["score"] == 1e7
-    assert detail["score_capped_from"] == 5e8
+    assert detail["score"] == 2.5e9
+    ctx = {"unit_dir": unit, scoring._PROFILE_KEY: "developer"}
+    assert scoring._developer_plausibility(ctx, 2.5e9, 3).passed
+    assert not scoring._developer_plausibility(ctx, 3.5e9, 3).passed
+
+
+def _dev_record(elapsed: float) -> object:
+    """A Development-shaped C2: no telemetry, no repeats, not rankable, timed by the harness."""
+    raw = F.run_record_mapping(n_events=N_ROWS)
+    raw.update(
+        telemetry=None,
+        repeats=[],
+        attestation=None,
+        rankability={"state": "unrankable", "unmet_controls": ["telemetry_absent"]},
+        timing={
+            "started_at": "2026-09-30T10:00:00Z",
+            "ended_at": f"2026-09-30T10:00:{int(elapsed):02d}Z",
+            "elapsed_sec": float(elapsed),
+            "applied_timeout_sec": 1800.0,
+        },
+    )
+    return F.RunRecord.from_mapping(raw)
+
+
+def _board_ctx(root: Path, self_reported: float, elapsed: float) -> dict[str, object]:
+    """As the Development driver builds it: the unit's C2 record and a plan."""
+    ctx = _developer_ctx_reporting(root, self_reported)
+    ctx["run_record"] = _dev_record(elapsed)
+    ctx["plan"] = F.plan(domain_max=8e7)
+    return ctx
+
+
+CARD_TIER_B = CARD.replace(
+    'scenario_family = "matching-engine-semantics"', 'scenario_family = "agent-mix"'
+).replace('semantic_tier          = "A"', 'semantic_tier          = "B"')
+
+
+def _tier_b_board_ctx(root: Path, *, pad: int = 0, n_events: object = None) -> dict[str, object]:
+    """A Tier B board unit, optionally padded with extra ORDER_SUBMITTED rows the check ignores."""
+    unit, out = build_unit(root, card=CARD_TIER_B)
+    cand = pd.read_parquet(out / "trace.parquet")
+    if pad:
+        extra = pd.DataFrame(
+            {
+                "t_ns": [int(cand.t_ns.max()) + 1 + i for i in range(pad)],
+                "agent_id": 0,
+                "msg_type": "ORDER_SUBMITTED",
+                "side": "BID",
+                "price": 100_000,
+                "size": 10,
+                "order_id": [10**6 + i for i in range(pad)],
+            }
+        )
+        cand = pd.concat([cand, extra], ignore_index=True)
+        cand.to_parquet(out / "trace.parquet")
+    events = _events(len(cand), len(cand) / 1e3, _sha(out / "trace.parquet"))
+    if n_events is not None:
+        events["n_events"] = n_events
+    (out / "events.json").write_text(json.dumps(events))
+    return {
+        "unit_dir": unit,
+        "output_dir": out,
+        "run_record": _dev_record(2.0),
+        "plan": F.plan(domain_max=8e7),
+    }
+
+
+def test_the_board_scores_verified_events_over_the_c2_time(tmp_path: Path) -> None:
+    ctx = _board_ctx(tmp_path, 1e3, elapsed=2.0)
+    verdict = build_developer_verifier(ctx).run(ctx)
+    assert verdict.admissible, verdict.gate_results
+    assert verdict.score == N_ROWS / 2.0
+    assert verdict.detail["score_source"] == scoring.SOURCE_C2_ELAPSED
+    assert verdict.detail["rankable"] is False
+
+
+def test_a_huge_self_report_no_longer_moves_the_board_score(tmp_path: Path) -> None:
+    """The self-report is only a consistency check now: 1e3 and 9e8 score the same."""
+    scores = []
+    for i, rate in enumerate((1e3, 9e8)):
+        ctx = _board_ctx(tmp_path / str(i), rate, elapsed=2.0)
+        verdict = build_developer_verifier(ctx).run(ctx)
+        assert verdict.admissible, verdict.gate_results
+        scores.append(verdict.score)
+    assert scores == [N_ROWS / 2.0, N_ROWS / 2.0]
+
+
+def test_a_batch_board_score_is_its_verified_total_over_the_c2_time(tmp_path: Path) -> None:
+    """The same per-unit rule as the Final: total events across the markets over the unit's time,
+    which the gates require to equal the organizer's declared total."""
+    unit = tmp_path / "bunit"
+    unit.mkdir()
+    subs = [{"sub": f"sub_{i:02d}", "n_events": 1000} for i in range(3)]
+    (unit / "batch.json").write_text(json.dumps({"subs": subs}))
+    detail = scoring._developer_score(
+        {"unit_dir": unit, "_dev_elapsed_sec": 2.0, "_batch": {"n_subs": 3}, "_verified_events": 3000}
+    )
+    assert detail["score"] == 1500.0 and detail["score_source"] == scoring.SOURCE_C2_ELAPSED
+    board = {"unit_dir": unit, "_dev_elapsed_sec": 2.0, "_batch": {"n_subs": 3}}
+    board[scoring._PROFILE_KEY] = "developer"
+    assert scoring._developer_exact_count(board, 3000).passed
+    assert not scoring._developer_exact_count(board, 3001).passed  # a padded batch total
+
+
+BATCH_CARD = """schema_version = "2.0"
+
+[task]
+id              = "t3-synthetic-batch"
+track           = "simulation"
+scenario_family = "throughput-scale"
+scenario_file   = "batch.json"
+
+[batch]
+batch = true
+n     = 2
+
+[scoring.params]
+semantic_tier          = "A"
+timestamp_tolerance_ns = 1000
+requires_message_ledger = true
+"""
+
+
+def _batch_board_ctx(root: Path) -> dict[str, object]:
+    """A two-market batch unit with references under checks/reference_data, as public units ship,
+    and a faithful candidate, in a Development board context."""
+    unit, out = root / "ref" / F.UNIT_HANDLE, root / "res" / F.UNIT_HANDLE
+    unit.mkdir(parents=True)
+    out.mkdir(parents=True)
+    (unit / "card.toml").write_text(BATCH_CARD)
+    subs, per_scenario = [], []
+    for k in range(2):
+        name = f"sub_{k:02d}"
+        scenario_id = f"{SCENARIO_ID}-{name}"
+        (unit / "scenarios").mkdir(exist_ok=True)
+        (unit / "scenarios" / f"{name}.json").write_text(
+            json.dumps({"scenario_id": scenario_id, "seed": SEED, "schema_version": 2})
+        )
+        ref = unit / "checks" / "reference_data" / name
+        ref.mkdir(parents=True)
+        cand = out / name
+        cand.mkdir()
+        for where in (ref, cand):
+            trace(N_ROWS).to_parquet(where / "trace.parquet")
+            ledger(200).to_parquet(where / "message_trace.parquet")
+            events = _events(N_ROWS, 1.0, _sha(where / "trace.parquet"))
+            events["scenario_id"] = scenario_id
+            (where / "events.json").write_text(json.dumps(events))
+        subs.append(
+            {
+                "sub": name,
+                "scenario_file": f"scenarios/{name}.json",
+                "n_events": N_ROWS,
+                "reference_trace_sha256": _sha(ref / "trace.parquet"),
+                "reference_message_sha256": _sha(ref / "message_trace.parquet"),
+            }
+        )
+        per_scenario.append({"sub": name, "n_events": N_ROWS})
+    (unit / "batch.json").write_text(json.dumps({"n": 2, "subs": subs}))
+    total = 2 * N_ROWS
+    (out / "batch_events.json").write_text(
+        json.dumps(
+            {
+                "n_scenarios": 2,
+                "total_events": total,
+                "wall_clock_sec": 1.0,
+                "events_per_sec": float(total),
+                "per_scenario": per_scenario,
+            }
+        )
+    )
+    return {
+        "unit_dir": unit,
+        "output_dir": out,
+        "run_record": _dev_record(2.0),
+        "plan": F.plan(domain_max=8e7),
+    }
+
+
+def test_a_batch_board_unit_scores_its_verified_total_end_to_end(tmp_path: Path) -> None:
+    """Through every gate: the total across the declared markets over the unit's C2 time."""
+    ctx = _batch_board_ctx(tmp_path)
+    verdict = build_developer_verifier(ctx).run(ctx)
+    assert verdict.admissible, verdict.gate_results
+    assert verdict.score == 2 * N_ROWS / 2.0
+
+
+def test_a_padded_batch_board_unit_is_refused_at_its_exact_count(tmp_path: Path) -> None:
+    """A self-consistent batch whose total exceeds the declared reference fails the exact count."""
+    ctx = _batch_board_ctx(tmp_path)
+    out = Path(ctx["output_dir"])
+    sub = out / "sub_00"
+    padded = pd.concat([trace(N_ROWS), trace(5, start=N_ROWS)], ignore_index=True)
+    padded.to_parquet(sub / "trace.parquet")
+    events = json.loads((sub / "events.json").read_text())
+    events.update(n_events=len(padded), trace_sha256=_sha(sub / "trace.parquet"))
+    events["events_per_sec"] = len(padded) / events["wall_clock_sec"]
+    (sub / "events.json").write_text(json.dumps(events))
+    batch = json.loads((out / "batch_events.json").read_text())
+    batch["per_scenario"][0]["n_events"] = len(padded)
+    batch["total_events"] = len(padded) + N_ROWS
+    batch["events_per_sec"] = float(batch["total_events"])
+    (out / "batch_events.json").write_text(json.dumps(batch))
+    verdict = build_developer_verifier(ctx).run(ctx)
+    assert not verdict.admissible
+    assert "must match exactly" in verdict.gate_results["g1_schema"].detail["reason"]
+
+
+def test_a_local_tier_b_run_one_row_short_is_refused(tmp_path: Path) -> None:
+    """Local practice runs get the same exact-count check as the board and the Final."""
+    unit, out = build_unit(tmp_path, card=CARD_TIER_B)
+    cand = pd.read_parquet(out / "trace.parquet").iloc[: N_ROWS - 1]
+    cand.to_parquet(out / "trace.parquet")
+    (out / "events.json").write_text(
+        json.dumps(_events(len(cand), len(cand) / 1e3, _sha(out / "trace.parquet")))
+    )
+    ctx = {"unit_dir": unit, "output_dir": out}  # no C2 record, no plan: a local run
+    verdict = build_developer_verifier(ctx).run(ctx)
+    assert not verdict.admissible
+    (*_, last) = verdict.gate_results.values()
+    assert "must match exactly" in last.detail["reason"]
+
+
+def test_a_local_run_on_a_unit_with_no_reference_count_is_admitted(tmp_path: Path) -> None:
+    """Locally there is nothing to check the count against, which is not an organizer fault."""
+    ctx = _batch_board_ctx(tmp_path)
+    del ctx["run_record"], ctx["plan"]  # a local run
+    unit = Path(ctx["unit_dir"])
+    batch = json.loads((unit / "batch.json").read_text())
+    for sub in batch["subs"]:
+        del sub["n_events"]
+    (unit / "batch.json").write_text(json.dumps(batch))
+    verdict = build_developer_verifier(ctx).run(ctx)
+    assert verdict.admissible, verdict.gate_results
+
+
+def test_a_board_unit_without_a_reference_count_is_an_organizer_fault(tmp_path: Path) -> None:
+    """A batch whose subs declare no n_events has no reference count to cap at, so it is held."""
+    unit = tmp_path / "bunit"
+    unit.mkdir()
+    (unit / "batch.json").write_text(json.dumps({"subs": [{"sub": "sub_00"}, {"sub": "sub_01"}]}))
+    board = {"unit_dir": unit, "_dev_elapsed_sec": 2.0, "_batch": {"n_subs": 2}}
+    board[scoring._PROFILE_KEY] = "developer"
+    exc = _expect(OrganizerFault, lambda: scoring._developer_exact_count(board, 10))
+    assert "no reference event count" in str(exc)
+
+
+def test_an_unpadded_tier_b_unit_scores_its_rows_over_the_c2_time(tmp_path: Path) -> None:
+    ctx = _tier_b_board_ctx(tmp_path)
+    verdict = build_developer_verifier(ctx).run(ctx)
+    assert verdict.admissible, verdict.gate_results
+    assert verdict.score == N_ROWS / 2.0
+
+
+def test_a_padded_tier_b_trace_is_refused_on_development(tmp_path: Path) -> None:
+    """Development applies the Final's exact count on every unit, Tier B included."""
+    verdict = build_developer_verifier(ctx := _tier_b_board_ctx(tmp_path, pad=40_000)).run(ctx)
+    assert not verdict.admissible
+    assert FailureLabel.T3_SEMANTIC_REGRESSION in verdict.labels
+
+
+def test_a_tier_b_run_one_row_short_is_refused_on_development(tmp_path: Path) -> None:
+    unit, out = build_unit(tmp_path, card=CARD_TIER_B)
+    cand = pd.read_parquet(out / "trace.parquet").iloc[: N_ROWS - 1]
+    cand.to_parquet(out / "trace.parquet")
+    (out / "events.json").write_text(
+        json.dumps(_events(len(cand), len(cand) / 1e3, _sha(out / "trace.parquet")))
+    )
+    ctx = {
+        "unit_dir": unit,
+        "output_dir": out,
+        "run_record": _dev_record(2.0),
+        "plan": F.plan(domain_max=8e7),
+    }
+    verdict = build_developer_verifier(ctx).run(ctx)
+    assert not verdict.admissible
+    (*_, last) = verdict.gate_results.values()
+    assert "must match exactly" in last.detail["reason"]
+
+
+def test_a_numeric_string_n_events_is_scored_not_crashed(tmp_path: Path) -> None:
+    """The count comes from the trace itself, so a sidecar writing "400.0" no longer reaches int()."""
+    ctx = _tier_b_board_ctx(tmp_path, n_events="400.0")
+    verdict = build_developer_verifier(ctx).run(ctx)
+    assert verdict.admissible, verdict.gate_results
+    assert verdict.score == N_ROWS / 2.0
+
+
+def test_a_board_context_without_a_usable_c2_time_is_an_organizer_fault(tmp_path: Path) -> None:
+    """A board context never falls back to the self-report, and a zero time is not a measurement."""
+    ctx = _developer_ctx_reporting(tmp_path / "no_c2", 1e3)
+    ctx["plan"] = F.plan()
+    _expect(OrganizerFault, lambda: build_developer_verifier(ctx).run(ctx))
+
+    ctx = _board_ctx(tmp_path / "zero", 1e3, elapsed=0.0)
+    _expect(OrganizerFault, lambda: build_developer_verifier(ctx).run(ctx))
+
+
+def _official_resized_ctx(root: Path, *, card: str, rows: int) -> dict[str, object]:
+    """An official context whose candidate trace has ``rows`` rows against a 400-row reference:
+    padded with extra ORDER_SUBMITTED rows, or truncated. The Runner's counts match the output."""
+    unit, out = build_unit(root, card=card)
+    cand = pd.read_parquet(out / "trace.parquet")
+    if rows > len(cand):
+        pad = rows - len(cand)
+        extra = pd.DataFrame(
+            {
+                "t_ns": [int(cand.t_ns.max()) + 1 + i for i in range(pad)],
+                "agent_id": 0,
+                "msg_type": "ORDER_SUBMITTED",
+                "side": "BID",
+                "price": 100_000,
+                "size": 10,
+                "order_id": [10**6 + i for i in range(pad)],
+            }
+        )
+        cand = pd.concat([cand, extra], ignore_index=True)
+    else:
+        cand = cand.iloc[:rows]
+    cand.to_parquet(out / "trace.parquet")
+    (out / "events.json").write_text(
+        json.dumps(_events(len(cand), 1.5, _sha(out / "trace.parquet")))
+    )
+    return {
+        "unit_dir": unit,
+        "output_dir": out,
+        "unit_handle": F.UNIT_HANDLE,
+        "plan": F.plan(),
+        "run_record": F.bind_output(F.run_record_mapping(n_events=len(cand)), unit, out),
+    }
+
+
+def test_a_tier_b_count_that_differs_from_the_reference_is_refused_in_the_final(tmp_path: Path) -> None:
+    """The Final keeps the exact count on every unit, Tier B included: a Tier B statistical gate
+    does not compare counts, so the numerator check is what stops filler rows."""
+    ctx = _official_resized_ctx(tmp_path / "exact", card=CARD_TIER_B, rows=N_ROWS)
+    verdict = build_verifier(ctx).run(ctx)
+    assert verdict.admissible, verdict.gate_results
+    assert verdict.score == N_ROWS / 1.0  # measured repeats take 1.0 s each
+    for rows in (N_ROWS + 40_000, N_ROWS - 20):
+        ctx = _official_resized_ctx(tmp_path / str(rows), card=CARD_TIER_B, rows=rows)
+        verdict = build_verifier(ctx).run(ctx)
+        assert not verdict.admissible, rows
+
+
+def test_ranked_timing_refuses_to_rank_without_a_reference_count(tmp_path: Path) -> None:
+    """A caller that leaves the reference count out gets an organizer fault, not an unchecked rate."""
+    ctx = _official_resized_ctx(tmp_path, card=CARD, rows=N_ROWS)
+    exc = _expect(
+        OrganizerFault,
+        lambda: telemetry.ranked_timing(
+            ctx["run_record"], ctx["plan"], unit_dir=ctx["unit_dir"], output_dir=ctx["output_dir"]
+        ),
+    )
+    assert "no reference event count" in str(exc)
+
+
+def test_a_tier_a_count_that_differs_from_the_reference_is_still_refused(tmp_path: Path) -> None:
+    """Refused end to end, and by ``ranked_timing`` itself, which the private cross-check calls."""
+    ctx = _official_resized_ctx(tmp_path, card=CARD, rows=N_ROWS + 10)
+    verdict = build_verifier(ctx).run(ctx)
+    assert not verdict.admissible
+    exc = _expect(
+        ParticipantFailure,
+        lambda: telemetry.ranked_timing(
+            ctx["run_record"],
+            ctx["plan"],
+            reference_event_count=N_ROWS,
+            unit_dir=ctx["unit_dir"],
+            output_dir=ctx["output_dir"],
+        ),
+    )
+    assert "deterministic reference" in str(exc)
 
 
 # --------------------------------------------------------------------------- factory separation
@@ -323,7 +683,11 @@ def test_the_cross_check_path_sees_the_failure_too(tmp_path: Path) -> None:
     exc = _expect(
         telemetry.RunFailed,
         lambda: telemetry.ranked_timing(
-            ctx["run_record"], ctx["plan"], unit_dir=ctx["unit_dir"], output_dir=ctx["output_dir"]
+            ctx["run_record"],
+            ctx["plan"],
+            reference_event_count=N_ROWS,
+            unit_dir=ctx["unit_dir"],
+            output_dir=ctx["output_dir"],
         ),
     )
     assert isinstance(exc, ParticipantFailure)

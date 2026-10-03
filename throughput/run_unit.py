@@ -184,7 +184,9 @@ def retain_output(out_dir: Path, destination: Path, unit_dir: Path) -> None:
         verify_destination,
     )
 
-    from qfbench2_track_simulation.limits import allowed_paths_for
+    from qfbench2_common.contracts import TreeLimits
+
+    from qfbench2_track_simulation.limits import MAX_OUTPUT_BYTES, allowed_paths_for
 
     if destination.exists():
         shutil.rmtree(destination)
@@ -192,7 +194,12 @@ def retain_output(out_dir: Path, destination: Path, unit_dir: Path) -> None:
     staging = staging_sibling(destination)
     try:
         result = materialize_tree(
-            out_dir, staging, allowed_paths=allowed_paths_for(unit_dir)
+            out_dir,
+            staging,
+            allowed_paths=allowed_paths_for(unit_dir),
+            limits=TreeLimits(
+                max_file_bytes=MAX_OUTPUT_BYTES, max_total_bytes=MAX_OUTPUT_BYTES
+            ),
         )
         if result.unsafe_modes:
             raise TreeRefused(

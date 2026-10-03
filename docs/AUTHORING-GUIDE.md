@@ -446,9 +446,9 @@ For this local command, check that:
   ±5%.
 
 These are local timer defaults, not the current provisional Development service or the
-planned official Final protocol. Final repeat counts and warm-up treatment need their own
-published commitment, and Final timing runs use the `runc` container runtime, the same as
-Development; see [the timing profiles](../README.md#how-throughput-is-measured).
+planned official Final protocol. The Final's repeat count and warm-up treatment come from its
+evaluation plan, and Final timing runs use the `runc` container runtime, the same as Development;
+see [the timing profiles](../README.md#how-throughput-is-measured).
 
 ---
 

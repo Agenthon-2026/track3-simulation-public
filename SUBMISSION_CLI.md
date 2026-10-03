@@ -9,10 +9,15 @@ docker run --rm \
   --network=none|qfb2-eval \             # "none" (simulation) or the internal eval network (agent tracks) — see "Network modes"
   --cpus=<card.cpus> --memory=<card.memory> [--gpus all] \
   -v <unit-dir>:/input:ro \              # read-only inputs — the UNIT DIRECTORY itself is mounted at /input
-  -v <run>/output:/output \              # deliverables ONLY (T3: a log file here is path_not_allowed)
+  -v <run>/output:/output \              # deliverables ONLY (T3: see the note on extra files below)
   [-v <run>/output:/app/output] \       # T1 ONLY: the same host dir, also at the QFBench path (see invariant 8)
   <SUBMISSION_IMAGE> <verb> [args]
 ```
+
+**Extra files in `/output` (Track 3).** The organizers' Development and Final checks do not refuse a
+file outside the unit's expected outputs, such as a log; it only counts toward the output size and
+file-count limits. The local harness (`throughput/run_unit.py`) is stricter: it refuses the whole
+output tree if any file falls outside Track 3's list. Keep logs out of `/output`.
 
 **The verb is the container command.** It arrives as the first argument after the image
 reference, so your image must either resolve it from `PATH` (build with no `ENTRYPOINT` — the
@@ -228,6 +233,10 @@ everything else to `simulate`. Six of the public dev units (`t3-gbatch-*`) are b
    targets are never mounted.
 4. Determinism: the harness sets `QFBENCH_SEED`; organizer verification within the joint Final + Verification phase
    reruns on fresh seeds/resamples and compares against the final-submission result (reproducibility gate).
+   Track 3: the simulator takes its seed from the scenario's `seed` field, and the scorer checks the output
+   against that seed, so `QFBENCH_SEED` must not change it. Every Final run of a unit uses the same scenario,
+   and nothing reseeds a scored run: the sealed units' own unpublished seeds are Track 3's fresh seeds, each
+   with its own reference.
 5. Wall-clock and resource caps are per-track (`card.environment`); exceeding them is a `g2` failure.
 6. **T2 text cutoff (g2):** every document in `/input/text/` must have a timestamp field ≤ `--asof`.
    The harness checks text timestamps in addition to panel data timestamps. A document with a

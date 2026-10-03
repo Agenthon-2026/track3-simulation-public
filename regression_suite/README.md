@@ -10,9 +10,9 @@ The suite is structured to cover the core correctness invariants that any compli
 
 - **Price-time priority ordering.** When two resting orders at the same price compete for a fill, the order that arrived first (by simulated timestamp) must fill first. No tie-breaking by agent ID, order size, or any other criterion is permissible.
 - **Partial-fill correctness.** A resting order that is partially filled must remain on the book at the reduced size. Its timestamp priority must not be reset by the partial fill. Subsequent fills must consume remaining quantity before touching orders at the same price that arrived later.
-- **Cancel/replace atomicity.** A cancel-replace (modify) operation must be processed as a single atomic step from the perspective of other agents' order streams. It is not permissible for another agent's order to fill against the pre-modify resting order after the cancel half of the operation has been processed but before the replace half is processed.
+- **Cancel and repost.** Market makers cancel all their resting quotes and post a fresh ladder on every wakeup. Each cancel is its own `ORDER_CANCELLED` event, in arrival order; there is no atomic modify/replace operation.
 - **Self-trade prevention.** The STP policy declared in `exchange_config.stp_policy` must be applied consistently. The verifier checks that no fill event involves the same firm ID on both sides of the trade when STP is enabled.
-- **Market-order fill semantics.** A market order must fill against the best available resting limit orders in price-time priority order, walking the book until the order quantity is exhausted or the book is empty. Unfilled residual market-order quantity must be cancelled (not left resting) unless the scenario declares `allow_market_order_rest: true`.
+- **Marketable limit orders.** No agent sends a market order. Value and momentum traders cross the spread with a limit order at the best opposite price; it fills against the resting orders at that price in price-time priority, and any unfilled remainder rests on the book at that price.
 - **Order-book state consistency.** A correct simulator keeps the book internally consistent — bids strictly below asks except transiently during a fill, positive resting quantities, no cancelled or fully filled order still resting. Note how this is *enforced*: the verifier does **not** reconstruct a book from your trace and test it. There is no crossed-book check, no phantom-order check and no fill-omission check anywhere in the harness or the scorer. These properties are enforced indirectly, because a trace that violates them cannot reproduce the reference's exact event multiset and sequence. Expect a coverage or fill-sequence breach, not a book-consistency diagnostic.
 
 ---
@@ -141,7 +141,7 @@ An earlier revision of this document presented Kendall-tau as a Family-3 extra. 
 
 ### Tier B — Statistical Proximity (Families 2, 4, 5)
 
-Applied to: all scenarios in Families 2, 4, and 5.
+Applied to: all scenarios in Families 2, 4, and 5. On every unit, Tier B included, the trace must also carry exactly the reference's event count.
 
 Two metrics are evaluated per scenario, and both are computed from the candidate's own trace — there is no comparison against any series the candidate does not emit:
 

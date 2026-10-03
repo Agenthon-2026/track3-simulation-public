@@ -39,6 +39,20 @@ class TimerProfileTests(unittest.TestCase):
             timer.RunMetrics(40.0, 2.5, 4.0, 300),
         ]
 
+    def test_every_run_uses_the_scenario_seed_unless_seeds_are_varied(self) -> None:
+        """The Final runs every repeat on the scenario's own seed, so the local timer does too;
+        --vary-seeds keeps the old behaviour of a different seed per run."""
+        for vary, expect_same in [(False, True), (True, False)]:
+            with self.subTest(vary_seeds=vary):
+                with patch.object(timer, "run_single", side_effect=self.measurements()) as run:
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        result = timer.measure_throughput(
+                            "synthetic:local", self.scenario, runs=3, vary_seeds=vary
+                        )
+                seeds = [call.kwargs["seed"] for call in run.call_args_list]
+                self.assertEqual(seeds, result.seed_family)
+                self.assertEqual(seeds == [7, 7, 7], expect_same)
+
     def test_serialization_preserves_measurements_and_warmup_statistics(self) -> None:
         for discard, aggregates in [
             (True, (30.0, 30.0, 10.0, 20.0, 40.0)),

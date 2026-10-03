@@ -22,9 +22,10 @@ still executes participant code on somebody's workstation:
 * **no re-invocation of the participant image**, for cleanup or anything else. Cleanup is host-side
   and best-effort.
 
-Runs a candidate Docker image N times (default 5) with different seeds drawn from a
-seed family derived from the scenario's base seed, discards the first run as warm-up,
-and reports the median events/sec alongside the full distribution.
+Runs a candidate Docker image N times (default 5), each run on the scenario's own seed as the
+Final does, discards the first run as warm-up, and reports the median events/sec alongside the
+full distribution. ``--vary-seeds`` instead draws each run's seed from a family derived from the
+scenario's seed, for testing a simulator across seeds; those runs are different simulations.
 
 Warm-up rationale
 -----------------
@@ -773,12 +774,14 @@ def measure_throughput(
     cpus: str = "4",
     memory: str = "16g",
     gpus: str | None = None,
+    vary_seeds: bool = False,
 ) -> ThroughputResult:
     """
     Measure steady-state throughput of a Docker image on a given scenario.
 
-    Runs the container *runs* times using seeds from a deterministic seed family
-    derived from the scenario's ``base_seed``.  If *discard_warmup* is True,
+    Runs the container *runs* times on the scenario's own seed, as the Final does, so every run
+    is the same simulation. With *vary_seeds*, each run instead takes a seed from a
+    deterministic family derived from the scenario's ``base_seed``.  If *discard_warmup* is True,
     the first run's statistics are excluded from aggregate calculations (but
     retained in ``raw_events_per_sec`` at index 0 for audit purposes).
 
@@ -828,7 +831,9 @@ def measure_throughput(
     )
     scenario_id: str = str(scenario_config.get("scenario_id", scenario_path.stem))
 
-    seed_family = derive_seed_family(base_seed, runs)
+    seed_family = (
+        derive_seed_family(base_seed, runs) if vary_seeds else [base_seed] * runs
+    )
 
     raw_eps: list[float] = []
     wall_clocks: list[float] = []
@@ -976,6 +981,12 @@ Examples:
         help="Docker --memory value. Default: 16g (matches benchmark hardware).",
     )
     parser.add_argument(
+        "--vary-seeds",
+        action="store_true",
+        help="Give each run a different seed derived from the scenario's seed. Default: every run "
+        "uses the scenario's own seed, as the Final does.",
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         default=None,
@@ -1000,6 +1011,7 @@ Examples:
         discard_warmup=args.discard_warmup,
         cpus=args.cpus,
         memory=args.memory,
+        vary_seeds=args.vary_seeds,
     )
 
     print(flush=True)

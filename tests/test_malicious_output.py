@@ -276,5 +276,51 @@ def test_a_clean_run_is_retained(tmp_path: Path) -> None:
     assert not any(p.is_symlink() for p in kept.rglob("*"))
 
 
+def test_a_file_over_the_shared_64_mib_default_is_retained(tmp_path: Path) -> None:
+    """Track 3 allows 256 MiB per file, so a 65 MiB ledger is kept, not refused."""
+    import os
+
+    from throughput.run_unit import retain_output
+
+    from qfbench2_track_simulation.limits import MAX_OUTPUT_BYTES
+
+    assert MAX_OUTPUT_BYTES == 256 * 1024 * 1024
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    (raw / "trace.parquet").write_bytes(b"PAR1")
+    (raw / "events.json").write_bytes(b"{}")
+    (raw / "message_trace.parquet").write_bytes(os.urandom(65 * 1024 * 1024))
+    unit = tmp_path / "unit"
+    unit.mkdir()
+    kept = tmp_path / "kept"
+    retain_output(raw, kept, unit)
+    assert (kept / "message_trace.parquet").stat().st_size == 65 * 1024 * 1024
+
+
+def test_the_local_harness_applies_track_3s_256_mib_limits(tmp_path: Path, monkeypatch) -> None:
+    """Per file and in total, the same 256 MiB as the platform, not more and not the 64 MiB default."""
+    import qfbench2_common.sanitize as sanitize
+
+    from throughput.run_unit import retain_output
+
+    seen = {}
+
+    def spy(*args, **kwargs):
+        seen["limits"] = kwargs.get("limits")
+        raise RuntimeError("stop after capturing the limits")
+
+    monkeypatch.setattr(sanitize, "materialize_tree", spy)
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    unit = tmp_path / "unit"
+    unit.mkdir()
+    try:
+        retain_output(raw, tmp_path / "kept", unit)
+    except RuntimeError:
+        pass
+    limits = seen["limits"]
+    assert (limits.max_file_bytes, limits.max_total_bytes) == (256 * 1024 * 1024, 256 * 1024 * 1024)
+
+
 def _cleanup(root: Path) -> None:  # pragma: no cover - helper for the script runner
     shutil.rmtree(root, ignore_errors=True)

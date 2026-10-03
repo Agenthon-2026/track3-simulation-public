@@ -45,6 +45,7 @@ from qfbench2_common.contracts import ContractError, OrganizerFault, normalize_t
 __all__ = [
     "BATCH_ROOT_FILES",
     "MAX_DEPTH",
+    "MAX_OUTPUT_BYTES",
     "PROFILE_SIDECAR",
     "SINGLE_UNIT_FILES",
     "STABLE_OUTPUT_FILES",
@@ -92,8 +93,8 @@ STABLE_REPEAT_POLICY_ID = "t3-stable-output-v1"
 #: `track3-simulation-public#5` / `Agenthon2026#116`: the repeat check compares a byte digest of
 #: the WHOLE output tree across repeats, `events.json` is inside that tree, and `events.json` must
 #: carry a real `wall_clock_sec`. An honest submission therefore diverges on every repeat and is
-#: refused. It is invisible in Development, which ranks through `build_developer_verifier` on the
-#: self-reported branch, and first bites in the Final phase.
+#: refused. It is invisible in Development, which scores one run per unit and never compares
+#: repeats, and first bites in the Final phase.
 #:
 #: Naming the set here, beside the allowlist that already owns "what may appear in /output", is the
 #: prerequisite for every candidate repair: excluding these from the digest, canonicalising their
@@ -216,6 +217,13 @@ def volatile_paths_for(unit_dir: str | Path) -> tuple[str, ...]:
         for p in allowed_paths_for(unit_dir)
         if p.rsplit("/", 1)[-1] in VOLATILE_OUTPUT_FILES
     )
+
+
+#: Track 3's output size limit, per file and in total: 256 MiB in Development and the Final (the
+#: other tracks keep 64 MiB). A large unit's trace and message ledger can exceed 64 MiB, so the
+#: shared 64 MiB per-file default would refuse correct answers. The local harness applies the same
+#: limit as the platform.
+MAX_OUTPUT_BYTES = 256 * 1024 * 1024
 
 
 def max_rows_for(reference_rows: int, *, slack: float = 0.0) -> int:

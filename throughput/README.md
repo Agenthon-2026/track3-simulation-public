@@ -3,9 +3,9 @@
 ## Executive summary (read this first)
 
 Use this directory for local measurements and diagnostics. The current provisional Development
-service also uses the developer scoring profile (`rankable = False`), with checked self-reported
-throughput on a shared worker queue. Its practice scores and standings are not official comparable
-timing. The production timing requirements below belong to the planned official Final path,
+service also uses the developer scoring profile (`rankable = False`): the verified event count over
+the container time the harness measured, one run on a shared worker queue. Its practice scores and
+standings are not official comparable timing. The production timing requirements below belong to the planned official Final path,
 which runs under the `runc` container runtime, the same as Development; its timing isolation,
 repeat/warm-up commitment and paired repeat producer/validator still need release validation. See [the timing profiles](../README.md#how-throughput-is-measured).
 
@@ -68,15 +68,15 @@ six required keys).
 
 ## 2. `timer.py` — local timing protocol
 
-The developer measurement runs a candidate Docker image N times (default 5) with
-seeds drawn from a seed family derived from the scenario's base seed, **discards the first run
-as warm-up**, and reports the **median `events/sec`** plus the full distribution. Warm-up is
+The developer measurement runs a candidate Docker image N times (default 5), each run on the
+scenario's own seed as the Final does (`--vary-seeds` gives each run a different seed derived from
+it instead), **discards the first run as warm-up**, and reports the **median `events/sec`** plus the full distribution. Warm-up is
 discarded to remove cold-start effects (JIT/XLA kernel compilation, OS page cache, Python
 import overhead) that are not intrinsic to the simulator; `--no-discard-warmup` includes all
 runs for pure-binary submissions. These are local defaults, not the final evaluation plan.
 Official repeat counts and warm-up treatment are committed in that plan; the official scorer
-requires each measured repeat to reproduce the scored output, rather than substituting this
-tool's varying-seed runs.
+requires each measured repeat to reproduce the scored output, which is why this tool runs every
+repeat on the same seed by default.
 
 ```
 python timer.py \
@@ -232,13 +232,14 @@ factory explicitly; it does not make the production factory fall back to partici
 | Factory | Score source | `rankable` | Used for official ranking |
 |---|---|---|---|
 | `build_verifier` (**production**) | trusted C1 + C2 timing only | `True` | yes |
-| `build_developer_verifier` | harness file, else the self-report | **always `False`** | no |
+| `build_developer_verifier` | C2 container time on the Development board; locally, the harness file, else the self-report | **always `False`** | no |
 
 `_official_score` reads `ctx["_t3_timing"]` and nothing else — its docstring states that there is
 no branch in it that reads the submission's own `events_per_sec`. Handed a context without trusted
 evidence, the production factory raises `OrganizerFault` naming
-`build_developer_verifier`; it does not quietly degrade. The self-report path survives only in the
-developer factory, where every result carries `rankable = False`.
+`build_developer_verifier`; it does not quietly degrade. The self-report path survives only for
+local runs of the developer factory with no C2 record, where every result carries
+`rankable = False`; a Development board context without a C2 record is an organizer fault.
 
 `host_metrics.json` therefore still matters for local practice, but the **ranked** number no longer
 depends on it — C2 supplies host-measured timing.

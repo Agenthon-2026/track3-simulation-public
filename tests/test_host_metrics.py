@@ -190,8 +190,8 @@ def test_self_reported_rates_from_issue_19_are_never_refused() -> None:
     single-market rates in their own events.json, and at the old 1e7 ceiling every one was refused
     as schema_invalid and scored zero.
 
-    They are not organizer measurements and nothing here treats them as one: the Development path
-    has no organizer clock, which is the very reason this ceiling exists. What the organizers
+    They are not organizer measurements and nothing here treats them as one: they were self-reported,
+    which is the very reason this ceiling exists. What the organizers
     confirmed on #19 is which gate refused the units, not that the rates were real. They are pinned
     here as the shape of self-report a cancel-heavy unit plausibly produces, so that a ceiling
     regression that would refuse them again fails the suite instead of a participant's board: this

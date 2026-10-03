@@ -118,12 +118,13 @@ The matching engine must handle:
 
 - **Limit orders** — "buy up to N shares at price P or lower" (for a buy) or "sell at P
   or higher" (for a sell). A limit order that does not immediately cross rests in the book.
-- **Market orders** — "buy N shares at whatever the current best price is." These fill
-  immediately against the best resting orders, walking through the book until they are
-  fully filled or the book is exhausted.
+- **Marketable limit orders** — a limit order priced to cross the spread (a buy at or above
+  the best ask). It fills immediately against the resting orders at that price, and any
+  remainder rests in the book. No agent in the baseline sends a market order.
 - **Partial fills** — when a large incoming order matches against several smaller resting
   orders in sequence (see Section 5).
-- **Cancel and replace** — when an agent wants to modify an existing order (see Section 5).
+- **Cancels** — market makers cancel their resting quotes and repost on every wakeup (see
+  Section 5).
 - **Self-trade prevention** — rules to prevent a single firm from trading against itself
   (see Section 5).
 
@@ -157,14 +158,13 @@ A resting order that is **partially** filled (say, 150 of 200 shares fill) stays
 book with its remaining quantity (50 shares) and **keeps its original time priority**. It
 does not go to the back of the queue.
 
-### Cancel and replace
+### Cancel and repost
 
-An agent can cancel a resting order (remove it from the book) or **cancel-and-replace**
-it (cancel the old order and submit a new one at a different price or size). The two
-operations must happen atomically from the exchange's perspective: another agent's order
-cannot fill against the old version after the cancel half is processed but before the new
-version is posted. If the new order is at a **different price**, it gets a **new time
-priority** (it goes to the back of that price level's queue).
+An agent can cancel a resting order (remove it from the book). Market makers cancel all their
+resting quotes and post a fresh ladder on every wakeup. There is no atomic modify/replace: each
+cancel is its own `ORDER_CANCELLED` event, processed in arrival order, so another agent's order
+that arrives before the cancel can still fill the old quote. A reposted order is a new order with
+a **new time priority** (it goes to the back of its price level's queue).
 
 ### Self-trade prevention (STP)
 
@@ -418,8 +418,9 @@ the depth distribution is JSD ≤ 0.10.
 ## 11. Events per second — the speed metric
 
 Throughput is `events_per_sec`: the number of exchange events your simulator processed per
-second of real wall-clock time. The current provisional Development service uses checked
-self-reported rates and the developer profile (`rankable = False`) on a shared worker queue.
+second of real wall-clock time. The current provisional Development service scores the verified
+event count over the container time its harness measured, with the developer profile
+(`rankable = False`) on a shared worker queue.
 Its practice scores and standings do not establish official comparable timing. See
 [the timing profiles](../README.md#how-throughput-is-measured) for the planned official Final path.
 
@@ -438,8 +439,8 @@ Your simulator must write this number to `events.json` after each run:
 }
 ```
 
-The local `throughput/timer.py` defaults to five runs with different derived seeds and discards
-the first as warm-up. Its median is a developer measurement. The official evaluation plan
+The local `throughput/timer.py` defaults to five runs, each on the scenario's own seed
+(`--vary-seeds` varies it), and discards the first as warm-up. Its median is a developer measurement. The official evaluation plan
 separately commits its repeat count and warm-up treatment; those final settings are not implied
 by the local defaults.
 

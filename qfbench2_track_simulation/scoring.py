@@ -14,11 +14,11 @@ row counts (frozen ruling R-3), telemetry meeting the frozen C7 thresholds, and 
 validated. Missing or inadequate evidence is an organizer fault that aborts the evaluation; it is
 never a low participant score, and it is never quietly replaced by the submission's own number.
 
-``build_developer_verifier`` is the **developer** factory, for local practice against a harness
-that cannot produce trusted timing. It ranks on the local ``host_metrics.json`` measurement or, as
-a last resort, the submission's self-report — and every result it emits carries
-``rankable = False`` and ``profile = "developer"``. It is not reachable from the platform driver:
-the driver calls ``build_verifier`` by name.
+``build_developer_verifier`` is the **developer** factory: the Development board and local
+practice. Every result it emits carries ``rankable = False`` and ``profile = "developer"``. On the
+board, where the driver supplies the unit's C2 record, the score is the verified event count over
+the container time the harness measured (``timing.elapsed_sec``), one run on a shared host. Locally,
+with no C2 record, it falls back to ``host_metrics.json`` or, as a last resort, the self-report.
 
 That split is the whole remediation. Previously one factory did both, and because the production
 ingestion path never wrote the handoff file, the production factory took the developer branch on
@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import pathlib
 import tomllib
 from typing import Any
@@ -253,6 +254,36 @@ def _reference_event_count(ctx: dict[str, Any]) -> int | None:
     return None
 
 
+def _developer_exact_count(ctx: dict[str, Any], verified: int) -> GateResult:
+    """Development applies the Final's exact event count on every unit, Tier B included.
+
+    The Final checks it in :func:`telemetry.ranked_timing`; this is the same rule on the developer
+    profile, so the board previews it. A Tier B statistical check does not compare row counts, so
+    without this a padded or truncated Tier B trace would pass. A Development board unit with no
+    reference count is an organizer fault; a local run without one is not checked.
+    """
+    if _profile(ctx) == telemetry.PROFILE_OFFICIAL:
+        return GateResult(True)
+    reference = _reference_event_count(ctx)
+    if reference is None:
+        if "_dev_elapsed_sec" in ctx:
+            raise OrganizerFault(
+                f"unit {pathlib.Path(ctx['unit_dir']).name!r} declares no reference event count, "
+                "so its Development row count cannot be checked"
+            )
+        return GateResult(True)
+    if verified != reference:
+        return GateResult(
+            False,
+            FailureLabel.T3_SEMANTIC_REGRESSION,
+            {
+                "reason": f"the emitted trace has {verified} row(s) but the deterministic "
+                f"reference has {reference}; the row count must match exactly, as in the Final"
+            },
+        )
+    return GateResult(True)
+
+
 # --------------------------------------------------------------------------- gates
 def _g0_integrity(ctx: dict[str, Any]) -> GateResult:
     """Trusted evidence first. Nothing about the submission is read before this passes."""
@@ -285,8 +316,19 @@ def _g0_integrity(ctx: dict[str, Any]) -> GateResult:
             # earlier successful run's output can never grade a unit whose run failed.
             return GateResult(False, exc.label, exc.detail)
     else:
-        # Developer profile: the local harness handoff, read from the parent of the unit's output
-        # directory. A file that exists but is corrupt fails the gate rather than falling through.
+        # Development board: the driver supplies the unit's C2 record, and the score is measured
+        # from its time. A board context (it carries a plan) without one is an organizer fault, so
+        # the board can never fall back to the submission's own number.
+        record = ctx.get("run_record")
+        if record is not None:
+            ctx["_dev_elapsed_sec"] = _developer_elapsed_sec(record)
+        elif ctx.get("plan") is not None:
+            raise OrganizerFault(
+                "a Development board context carries a plan but no C2 run record; its score is the "
+                "harness-measured container time, so there is nothing to score it with"
+            )
+        # Local practice: the harness handoff, read from the parent of the unit's output directory.
+        # A file that exists but is corrupt fails the gate rather than falling through.
         try:
             ctx["_host_metrics"] = host_metrics.load(
                 pathlib.Path(ctx["output_dir"]).parent
@@ -342,6 +384,11 @@ def _g1_schema(ctx: dict[str, Any]) -> GateResult:
             )
         if not ok:
             return GateResult(False, FailureLabel.SCHEMA_INVALID_OUTPUT, info)
+        # Equal, by the check above, to the sum of the declared subs' real trace rows.
+        ctx["_verified_events"] = int(info["total_events"])
+        exact = _developer_exact_count(ctx, ctx["_verified_events"])
+        if not exact.passed:
+            return exact
         plausible = _developer_plausibility(
             ctx, float(ctx["_batch_events"]["events_per_sec"]), len(subs)
         )
@@ -585,6 +632,11 @@ def _g3_body(ctx: dict[str, Any]) -> GateResult:
             {"reason": "missing candidate trace.parquet"},
         )
 
+    # The real row count, read from the trace itself rather than from the sidecar.
+    ctx["_verified_events"] = len(cand)
+    exact = _developer_exact_count(ctx, len(cand))
+    if not exact.passed:
+        return exact
     # Anti-inflation cross-check: the reported n_events must match the actual output rows.
     reported_n = ctx["_events"].get("n_events")
     if reported_n is not None and int(float(reported_n)) != len(cand):
@@ -697,38 +749,64 @@ def _official_score(ctx: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-#: The most a developer-profile unit can SCORE: 1e7 events/sec per unit, batch units included, which
-#: is where the live Development average already clips every unit. Distinct from the refusal line:
-#: `_developer_plausibility` refuses only above `DEV_PLAUSIBILITY_CEILING_PER_MARKET` (1e9 per
-#: market), so a rate above 1e7 is admitted rather than zeroed. The rate is self-reported and
-#: nothing on the developer path can verify it, so a claim between the cap and the refusal line is
-#: admitted but earns no more than the cap. Official scoring never reaches this; it ranks on
-#: host-measured timing.
-_DEVELOPER_SCORE_CAP = domain.MAX_PER_MARKET_EVENTS_PER_SEC
+#: ``score_source`` for a Development board score taken from the unit's C2 container time.
+SOURCE_C2_ELAPSED = "c2_elapsed"
+
+
+def _developer_elapsed_sec(record: Any) -> float:
+    """The container time the Development harness measured for this unit, from its C2 record.
+
+    ``timing.elapsed_sec``, which the C2 parser already cross-checks against
+    ``ended_at - started_at``. It includes container start-up. A missing or non-positive value is
+    the harness's evidence failing, an organizer fault, never a participant result.
+    """
+    try:
+        elapsed = float(record.timing["elapsed_sec"])
+    except (AttributeError, KeyError, TypeError, ValueError):
+        raise OrganizerFault(
+            "the Development C2 record carries no timing.elapsed_sec"
+        ) from None
+    if not math.isfinite(elapsed) or elapsed <= 0.0:
+        raise OrganizerFault(
+            f"the Development C2 record's timing.elapsed_sec is {elapsed!r}, not a positive time"
+        )
+    return elapsed
 
 
 def _developer_score(ctx: dict[str, Any]) -> dict[str, Any]:
-    """A NON-RANKABLE events/sec for local practice. Never reachable from the platform driver."""
+    """A NON-RANKABLE events/sec: the Development board's, or a local practice run's."""
+    if "_dev_elapsed_sec" in ctx:
+        # Verified events over the harness's container time. The count is the gates' own: a single
+        # market's real trace rows (g3), a batch's total across its declared subs (g1), and the
+        # gates have already required it to equal the reference count exactly, as the Final does.
+        # The self-reported rate is only a consistency check here and never moves the score.
+        n_events = int(ctx["_verified_events"])
+        return {
+            "score": n_events / ctx["_dev_elapsed_sec"],
+            "profile": telemetry.PROFILE_DEVELOPER,
+            "rankable": False,
+            "score_source": SOURCE_C2_ELAPSED,
+            "n_events": n_events,
+            "elapsed_sec": ctx["_dev_elapsed_sec"],
+            "stylized_facts": None if ctx.get("_batch") else ctx.get("_sf_report"),
+        }
     unit = pathlib.Path(ctx["unit_dir"]).name
     self_reported = float(
         ctx["_batch_events"]["events_per_sec"]
         if ctx.get("_batch")
         else ctx["_events"]["events_per_sec"]
     )
-    rate, source = host_metrics.developer_events_per_sec(
+    # Local practice with no C2 record: the local harness measurement, else the self-report.
+    score, source = host_metrics.developer_events_per_sec(
         ctx.get("_host_metrics"), unit, self_reported
     )
-    cap = _DEVELOPER_SCORE_CAP
-    detail: dict[str, Any] = {
-        "score": min(rate, cap),
+    return {
+        "score": score,
         "profile": telemetry.PROFILE_DEVELOPER,
         "rankable": False,
         "score_source": source,
         "stylized_facts": None if ctx.get("_batch") else ctx.get("_sf_report"),
     }
-    if rate > cap:
-        detail["score_capped_from"] = rate
-    return detail
 
 
 # Declared at the parameter's exact type. `HierarchicalVerifier.__init__` takes
@@ -776,10 +854,10 @@ def build_developer_verifier(ctx: dict[str, Any]) -> HierarchicalVerifier:
     function at all; that is asserted from the driver's side by
     ``test_production_trust_never_reaches_the_developer_factory``.
 
-    The distinction that makes this safe is the one this factory already draws: production reads a
-    rate the organizer MEASURED, this reads one the participant REPORTED. They are different
-    quantities, so a board built from this one is unofficial — which is what ``rankable=False``,
-    ``profile="developer"`` and ``score_source="self_reported"`` have always said.
+    On the board the score is now measured too: the verified event count over the C2 record's
+    ``timing.elapsed_sec`` (``score_source="c2_elapsed"``), one run on a shared host, so the board
+    previews the Final's quantity. It stays unofficial, which is what ``rankable=False`` and
+    ``profile="developer"`` say. Only a local run with no C2 record reads a self-report.
     """
     ctx[_PROFILE_KEY] = telemetry.PROFILE_DEVELOPER
     return HierarchicalVerifier(_GATES, _developer_score)

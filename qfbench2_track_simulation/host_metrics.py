@@ -19,7 +19,8 @@ The producer now exists: C2 carries host-measured timing, per-repeat records and
 parquet-footer row counts. :mod:`qfbench2_track_simulation.telemetry` consumes it and is the only
 source of a ranked rate. **The participant-rate fallback is removed from every rankable path**, and
 what remains here is a *separately named developer profile* for local practice runs against a
-harness that cannot produce trusted timing.
+harness that cannot produce trusted timing. The Development board does not read it: there the
+developer verifier scores the container time from the unit's C2 record.
 
 Everything this module returns is stamped ``rankable = False``. There is no environment flag that
 promotes it. A caller that wants an official number calls :mod:`telemetry` and, when the evidence
