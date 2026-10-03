@@ -83,6 +83,10 @@ jobs:
       # no-secret job.
       - name: README command guards (published commands parse; toolkit caveat present)
         run: python tests/test_readme_commands.py
+      # Every Dockerfile shipped here carries the submission interface label in its final stage
+      # (SUBMISSION_CLI.md): the platform refuses an image without it. Stdlib-only.
+      - name: Dockerfile interface-label guard
+        run: python tests/test_dockerfile_labels.py
 
   lint-type:
     name: Lint + type check (ruff + mypy)

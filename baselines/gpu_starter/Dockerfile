@@ -31,6 +31,10 @@
 # TODO(hub): confirm against the fixed-SKU box (CUDA toolkit + driver, see baselines/README.md §5).
 FROM nvidia/cuda:12.8.0-runtime-ubuntu24.04
 
+# Required on every submission image by the published contract (SUBMISSION_CLI.md and the
+# CodaBench Submission Format page): an image without it is refused before it runs.
+LABEL qfbench2.interface_version="2.0"
+
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
     && apt-get install -y --no-install-recommends python3 python3-pip \

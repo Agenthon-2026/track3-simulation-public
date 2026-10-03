@@ -13,6 +13,10 @@
 ARG BASE_IMAGE=track3-abides-baseline:latest
 FROM ${BASE_IMAGE}
 
+# Required on every submission image (SUBMISSION_CLI.md). The default base already carries it, but
+# BASE_IMAGE can name any image, so this stage states it itself.
+LABEL qfbench2.interface_version="2.0"
+
 COPY gpu_kernel_example.py /opt/gpu_starter/gpu_kernel_example.py
 COPY simulate-gpu /usr/local/bin/simulate
 RUN chmod +x /usr/local/bin/simulate
