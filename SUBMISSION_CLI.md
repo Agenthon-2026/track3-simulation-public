@@ -32,6 +32,10 @@ The harness logs `sha256(image)` (anti-cheat), applies the card's CPU, memory, G
 settings, and mounts only files whose `manifest.json` checksum matches.
 `LABEL qfbench2.interface_version="2.0"` is required on the image.
 
+The Final cannot run an image that declares a Docker `VOLUME`, including one inherited from its base
+image. Such an upload is marked Failed when its run starts and does not use an attempt; remove the
+`VOLUME` (or choose another base image) and upload again.
+
 For Development, Coding and Explainability take the per-unit timeout from `[agent].timeout_sec`;
 Forecasting and Simulation use the launcher's 1,800-second fallback where no timeout is supplied.
 The unit clock includes container creation and an image pull when needed. The ingestion stage
@@ -168,8 +172,9 @@ server.
 3. **Disclose training cutoffs.** The training cutoff of every model used MUST be declared in
    submission metadata (`models[].training_cutoff` in `submission.json`).
 4. **Pin temperature/seed** where the API supports it. Entries are verified *statistically*
-   (bootstrap-CI overlap on organizer rerun for T2/T3/T4; for T1, the single-pass per-unit
-   verdicts must agree exactly).
+   (bootstrap-CI overlap on organizer rerun for T2/T3/T4). For T1, what has to match on a rerun
+   is the submitted image and program, not the House model's answers: a per-unit verdict that
+   differs only because the House model answered differently is not a violation.
 5. **Track 3 stays offline.** Simulation uses `network = "none"` and makes no model-API
    calls. Model-using submissions follow the House API allocation in their own track's guide:
    [Track 1](https://github.com/Agenthon-2026/track1-coding-public/blob/main/SUBMISSION_CLI.md#rules-for-model-api-use-restricted-mode),
@@ -233,6 +238,9 @@ everything else to `simulate`. Six of the public dev units (`t3-gbatch-*`) are b
    targets are never mounted.
 4. Determinism: the harness sets `QFBENCH_SEED`; organizer verification within the joint Final + Verification phase
    reruns on fresh seeds/resamples and compares against the final-submission result (reproducibility gate).
+   Because the rerun's `QFBENCH_SEED` is fresh, a seed meant to repeat must be a constant in your code.
+   Track 1: what has to match on the rerun is the submitted image and program, not the House model's answers,
+   so a per-unit verdict that differs only because the House model answered differently is not a violation.
    Track 3: the simulator takes its seed from the scenario's `seed` field, and the scorer checks the output
    against that seed, so `QFBENCH_SEED` must not change it. Every Final run of a unit uses the same scenario,
    and nothing reseeds a scored run: the sealed units' own unpublished seeds are Track 3's fresh seeds, each

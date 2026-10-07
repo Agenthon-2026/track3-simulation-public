@@ -216,6 +216,10 @@ profile and shared queue do not certify official Final timing. Follow the
 [image submission guide](https://github.com/Agenthon-2026/Agenthon2026-public/blob/v2.5.1/docs/IMAGE-SUBMISSIONS.md)
 for public pulls or an organizer-confirmed private mirror.
 
+The Final cannot run an image that declares a Docker `VOLUME`, including one inherited from its base
+image. Such an upload is marked Failed when its run starts and does not use an attempt; remove the
+`VOLUME` (or choose another base image) and upload again.
+
 ### Firewall
 
 Your container runs with `--network none`. It may not make any outbound network requests
