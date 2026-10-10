@@ -45,9 +45,12 @@ House timing change for other tracks adds no Simulation compute or network acces
 See the [Development runtime guide](https://github.com/Agenthon-2026/Agenthon2026-public/blob/v2.5.1/docs/DEVELOPMENT-RUNTIME.md)
 for applied limits and pending access status. Development settings do not certify Final resources.
 
-Build a `linux/amd64` image identified by its immutable digest. Follow the
-[image submission guide](https://github.com/Agenthon-2026/Agenthon2026-public/blob/v2.5.1/docs/IMAGE-SUBMISSIONS.md)
-for anonymous public pulls and the organizer confirmation required before using a private mirror.
+Build a `linux/amd64` image identified by its immutable digest. There's no private-image route in
+Agenthon 2026: your image must be anonymously pullable. A public image can be pulled by anyone,
+including the files and model artifacts inside it; leave out anything you don't want to share.
+Follow the
+[image submission guide](https://github.com/Agenthon-2026/Agenthon2026-public/blob/main/docs/IMAGE-SUBMISSIONS.md)
+for anonymous public pulls.
 A descriptor category or image-access field does not itself make a service available.
 
 ## How an upload is made

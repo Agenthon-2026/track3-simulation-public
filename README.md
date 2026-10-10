@@ -213,8 +213,10 @@ See the [Development runtime guide](https://github.com/Agenthon-2026/Agenthon202
 for process, temporary-space and output limits. The card's `disk = "10G"` is not used by this
 launcher and does not establish a writable 10 GiB workspace. The provisional Development
 profile and shared queue do not certify official Final timing. Follow the
-[image submission guide](https://github.com/Agenthon-2026/Agenthon2026-public/blob/v2.5.1/docs/IMAGE-SUBMISSIONS.md)
-for public pulls or an organizer-confirmed private mirror.
+[image submission guide](https://github.com/Agenthon-2026/Agenthon2026-public/blob/main/docs/IMAGE-SUBMISSIONS.md)
+for anonymous public pulls. There's no private-image route in Agenthon 2026: your image must be
+anonymously pullable. A public image can be pulled by anyone, including the files and model
+artifacts inside it; leave out anything you don't want to share.
 
 The Final cannot run an image that declares a Docker `VOLUME`, including one inherited from its base
 image. Such an upload is marked Failed when its run starts and does not use an attempt; remove the
