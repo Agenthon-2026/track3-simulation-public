@@ -653,11 +653,11 @@ scoring code is the `qfbench2_track_simulation/` package above, which is what
 ## Competition schedule and submission limits
 
 Development runs through **October 12, 2026**. The joint **Final + Verification phase runs
-October 13–25, 2026**. Each team makes **one final submission per track**; organizers perform
-verification within that same phase, with no separate participant Verification submission.
+October 13–25, 2026**. Each team makes **one final submission per track**, with no separate
+participant Verification submission.
 If two Final submissions finish this track with the same ranking score, the tie is broken in
 favour of the one uploaded earlier.
-Registration and Development close together on October 12, 2026 at **23:59 Anywhere on Earth (AoE, UTC−12)**. The joint Final + Verification phase closes on October 25, 2026 at **23:59 AoE**. Other competition dates and task/data cutoffs are unchanged.
+Registration and Development close together on October 12, 2026 at **23:59 Anywhere on Earth (AoE, UTC−12)**. Final uploads close on October 25, 2026 at **23:59 AoE** (October 26, 11:59 UTC). An upload made by then runs and counts even if its run finishes after the close; organizers verify the top entries after their runs, so verification can end after October 25. **Keep your image pullable until the results are published.** Other competition dates and task/data cutoffs are unchanged.
 
 At the participant Development opening, Track 3 allows **5 uploads per team per day**
 and **20 total uploads per team for this track during Development**. Use your team's single
