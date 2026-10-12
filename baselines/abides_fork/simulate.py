@@ -64,7 +64,11 @@ def simulate(
     reset_abides_counters()
     config = build_config(scenario)
     t0 = time.perf_counter()
-    end_state = abides.run(config)
+    # ABIDES's kernel writes summary_log.bz2 under ./log/<log_dir> at the end of every run
+    # (abides_core Kernel.write_summary_log, which ignores skip_log). Units run with a read-only
+    # root filesystem and a writable /tmp, so an absolute log_dir under /tmp keeps that write
+    # off the read-only working directory; os.path.join drops the "./log" prefix for it.
+    end_state = abides.run(config, log_dir="/tmp/abides")
     wall_clock_sec = time.perf_counter() - t0
     peak_memory_bytes = _peak_rss_bytes()
 
