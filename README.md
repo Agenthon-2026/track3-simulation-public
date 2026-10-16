@@ -448,6 +448,22 @@ A tie in the ranking score is broken in favour of the Final submission uploaded 
 [Competition schedule and submission limits](#competition-schedule-and-submission-limits)); the
 bootstrap CI lower bound does not decide it.
 
+**Close top entries are re-timed during verification.** After every Final run has finished, we
+compare neighbouring places once, using the Final runs' scores, from 1st–2nd down to 5th–6th; if the
+lower ranking score is at least 95% of the higher, both entries are *close*. Each close entry is run
+twice more on the Track 3 Final machine, with the same units, settings and scoring and one
+submission at a time, in two rounds (ranking order, then reverse order), and before each re-run we
+time the minimal *floor* image from
+[#24](https://github.com/Agenthon-2026/track3-simulation-public/issues/24). A close entry's ranking
+score becomes the **median of its three runs' ranking scores** (its Final run and its two re-runs);
+every other entry keeps its Final run's score, and ties are broken as above. A re-run that fails
+because of the submission is scored as it ran; one that fails for a reason on our side is run once
+more, and if that also fails on our side, the median of the remaining runs is used. If a re-run's
+traces or message ledgers differ from the Final run's, the submission is refused, as for runs that
+disagree (point 3 above). Each close entry's three scores and the floor times are published with the
+results; the floor times do not change any score. See
+[track3-simulation-public#37](https://github.com/Agenthon-2026/track3-simulation-public/issues/37).
+
 ### Local timing
 
 Measure your local baseline:

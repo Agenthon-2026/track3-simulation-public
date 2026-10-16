@@ -250,7 +250,8 @@ everything else to `simulate`. Six of the public dev units (`t3-gbatch-*`) are b
    Track 3: the simulator takes its seed from the scenario's `seed` field, and the scorer checks the output
    against that seed, so `QFBENCH_SEED` must not change it. Every Final run of a unit uses the same scenario,
    and nothing reseeds a scored run: the sealed units' own unpublished seeds are Track 3's fresh seeds, each
-   with its own reference.
+   with its own reference. Close top entries are also re-timed during verification, and their
+   re-runs enter the ranking score (README, the paragraph after the ranking rule).
 5. Wall-clock and resource caps are per-track (`card.environment`); exceeding them is a `g2` failure.
 6. **T2 text cutoff (g2):** every document in `/input/text/` must have a timestamp field ≤ `--asof`.
    The harness checks text timestamps in addition to panel data timestamps. A document with a
